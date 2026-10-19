@@ -4,7 +4,7 @@
 |---|---|
 | 版本 | v0.1-rev1（评审修订） |
 | 日期 | 2026-10-19 |
-| 对应需求 | `闭关模拟器-PRD-v0.1.md`（v0.1-rev2） |
+| 对应需求 | `闭关模拟器-PRD-v0.1.md`（v0.1-rev3） |
 | 状态 | 定稿（作为 M1–M5 的实现依据） |
 | 不在本文档范围 | 业务代码、题库内容、文案全文 |
 
@@ -266,7 +266,7 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 
 ### 4.8 崩溃恢复
 
-- Locked 期间每 15 s 原子写 `session.json`（含 `state/targetMs/elapsedMs/mono0/attempts/bank/goal/startedAt`）。
+- Locked 期间每 15 s 原子写 `session.json`（含 `state/targetMs/elapsedMs/monoBase/wallBaseMs/startedAtMs/attempts/cooldownUntilMs/bank/goal`）。
 - 正常出关：删除 `session.json`。
 - 启动时若存在 `session.json` 且 `state == Locked`：
   1. 不进入锁定，直接进 `Recovered` 弹窗；
@@ -382,6 +382,8 @@ PRD §5 的状态与转移表**原样迁入**，此处只补四条实现约定�
 | `quotes.json` | 同上 | 首次复制，用户可改 | 解析失败 → 内嵌兜底 |
 | `display_baseline.json` | 同上 | 入关写、出关删 | 存在即视为亮度可能残留 → 启动时自动还原并告知 |
 
+**时间戳口径**：所有落盘时间戳为 **Unix 毫秒**（`i64`，字段名 `*Ms`），不存 ISO 字符串；本地日期换算只发生在统计层与渲染层（PRD §8、`decisions/003`）。
+
 **路径全部经 Tauri path API 取得**，源码里不得出现硬编码盘符（对应 AGENTS 红线"禁止硬编码绝对路径"）。
 
 ---
@@ -397,7 +399,7 @@ PRD §5 的状态与转移表**原样迁入**，此处只补四条实现约定�
 | 抽题 | 记忆衰减命中、答对 30 天内不重复、**答错 30 分钟内不重复**、可抽 < 需要时三级退化、题库永不为空、同轮不重复、打乱后判定仍正确 |
 | 判分 | 全对通过；错 1 题即失败且不再出后续题；越界 `choice` 返回 `E_INVALID_CHOICE`；任何响应体不含 `answer` |
 | 抄写 | n≥3 全对进 `Copying`、n<3 直接 `Settled`；完全一致通过；少 1 字 / 多 1 字 / 错 1 字失败；全角半角不归一化（严格）；`Copying` 中 Esc 不产生转移 |
-| 统计 | 有效日门槛 25 分钟、当日多次累加；**23:50 开始 30 分钟归属 `startedAt` 当日**；`accident`/`interrupted` 计入累计但不计有效日；`emergency` 两者都不计；断签后显示 0 |
+| 统计 | 有效日门槛 25 分钟、当日多次累加；**23:50 开始 30 分钟归属 `startedAtMs` 当日**；`accident`/`interrupted` 计入累计但不计有效日；`emergency` 两者都不计；断签后显示 0 |
 | 状态机 | PRD §5.2 每条转移 + 每条非法转移；**`Cool`/`Challenge`/`Copying`/`Confirming` 中 `remaining≤0` 一律进 `Settled(completed)`**；`attempts` 单调递增、答错不清零 |
 | 存储 | 原子写断电模拟（写 tmp 后不 rename 应读旧值）；JSON 损坏行跳过；`teardown` 先停 io 队列再删快照（无"删后又被写回"）；`config`/`records` 版本迁移与未知字段保留 |
 
