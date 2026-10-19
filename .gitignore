@@ -1,0 +1,53 @@
+# ============================================================
+# 闭关模拟器 · .gitignore
+# 依据 AGENTS.md §3：只忽略"绝不入库"清单 + 工具链必然产物。
+# 反向约束（不得忽略）：AGENTS.md、README.md、docs/**、Cargo.lock、
+# pnpm-lock.yaml、rust-toolchain.toml、src-tauri/icons/**、src-tauri/resources/**
+# ============================================================
+
+# --- 前端 ---
+node_modules/
+dist/
+dist-ssr/
+coverage/
+*.local
+.vite/
+.eslintcache
+
+# --- Rust / Tauri ---
+src-tauri/target/
+src-tauri/gen/schemas/        # tauri build 自动生成的 capability schema
+*.pdb                         # 保留本地排查用，不进仓
+*.exe
+*.dll
+*.rlib
+*.rmeta
+
+# --- 发布物与临时包 ---
+*.zip
+*.7z
+*.msi
+*.nsis
+release/
+
+# --- 数据目录拷贝（%APPDATA%\闭关模拟器\ 的任何副本） ---
+appdata/
+闭关模拟器-数据备份/
+
+# --- 凭据与签名 ---
+.env
+.env.*
+*.pfx
+*.key
+*.pem
+
+# --- 本地工具状态 ---
+.codebuddy/
+
+# --- 临时素材与截图 ---
+docs/_scratch/
+
+# --- 系统噪音 ---
+Thumbs.db
+desktop.ini
+.DS_Store
