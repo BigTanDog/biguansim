@@ -18,7 +18,7 @@
 
 - 必须使用：`Rust（stable，由 rust-toolchain.toml 锁定）+ TypeScript（strict）；Tauri 2.x 单 crate（不建 workspace）；前端 Vue 3（<script setup>）+ Vite + Pinia；前端包管理 pnpm、Rust cargo，两侧 lock 文件必须入库；存储为本地 JSON 文件（%APPDATA%\闭关模拟器\），原子写，不引入数据库；样式用原生 CSS + CSS 变量，不引入 UI 组件库；测试用 cargo test 与 vitest（vitest 仅测纯函数）。 `
 - 禁止引入：` Electron 或任何第二套桌面壳（体积翻十倍，全局钩子需 native 模块）；任何本地 HTTP 服务，含 axum/warp/actix 与生产环境的 Vite devServer（一旦有端口，解锁动作就能被本机任意进程或网页 JS 调用，防绕过形同虚设）；数据库如 SQLite（全部数据 < 1 MB，JSON 足够且便于用户手改）；UI 组件库与 CSS 框架如 Element Plus / Naive UI / Arco / Tailwind / UnoCSS（只有 7 个页面且样式高度定制）；自动更新插件与遥测/崩溃上报 SDK（产品承诺全程离线）；改写注册表、安装服务、开机自启相关 crate（杀软误报红线）；重型日志框架如 tracing + 多层 subscriber（需求只是本地滚动文本日志）。`
-- 引入任何新依赖前，必须在交付报告中说明理由与体积影响，未经确认不得提交 lockfile 变更。
+- 引入任何新依赖前，必须说明直接依赖的理由与体积影响；占用传递依赖由工具解析，无需逐条确认。
 - 语法、格式与静态检查统一由工具保证，提交前必须全部通过，一条不过就不提交：
   · `pnpm format:check`（Prettier）
   · `pnpm lint`（ESLint，0 error 0 warning）
