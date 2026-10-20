@@ -27,11 +27,8 @@ struct Rect {
 }
 
 pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    if state.is_locked() {
-        return Ok(());
-    }
-
+    // 这里**不能**再用 `AppState.locked` 做重入保护：调用方为了保证置顶维持线程
+    // 一启动就能看到 true，已经把标志置位了。入关的合法性由状态机（machine）负责。
     let monitors = app.available_monitors().map_err(|e| e.to_string())?;
     if monitors.is_empty() {
         return Err("没有检测到任何显示器".to_string());
@@ -59,9 +56,12 @@ pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
         .get_webview_window(MAIN_LABEL)
         .ok_or_else(|| "主窗口不存在".to_string())?;
 
-    place(&main, &rects[0])?;
+    // 顺序很重要：必须先去掉装饰再定位定尺寸。
+    // 带标题栏时 set_size 设的是含边框的外尺寸，去掉装饰后客户区会多出一圈，
+    // 表现为"画面整体偏右下、边缘露出桌面"。
     main.set_decorations(false).map_err(|e| e.to_string())?;
     main.set_always_on_top(true).map_err(|e| e.to_string())?;
+    place(&main, &rects[0])?;
     main.show().map_err(|e| e.to_string())?;
     // 起势窗口必须拿到焦点，否则 3 秒内的 Esc 取消收不到按键（F-2.2）
     let _ = main.set_focus();
@@ -83,8 +83,8 @@ pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
         window.show().map_err(|e| e.to_string())?;
     }
 
-    // 注意：`AppState.locked` 只由 commands::start_session 与 runtime::finish 设置，
-    // overlay 不写它——否则同一个事实会有三个写入点（machine.state / AppState / timer）。
+    // `AppState.locked` 的 true 只由 commands::start_session 在调用本函数**之前**置位，
+    // 否则下面这个 keeper 线程会先看到 false 然后立刻退出（掷硬币，实测会随机失效）。
     log::info!("结界已展开，共 {} 块屏", rects.len());
 
     spawn_topmost_keeper(app.clone());
@@ -92,6 +92,9 @@ pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn unlock_screen(app: &AppHandle) {
+    // 幂等清理：调用方忘了置 false 也不会让窗口永远置顶
+    app.state::<AppState>().set_locked(false);
+
     for (label, window) in app.webview_windows() {
         if label.starts_with(SECONDARY_PREFIX) {
             let _ = window.close();

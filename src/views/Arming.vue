@@ -1,9 +1,13 @@
 <script setup lang="ts">
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { computed, onMounted, onUnmounted } from 'vue'
 
 import { useSessionStore } from '../stores/session'
 
 const store = useSessionStore()
+
+// 副屏镜像（label = display-N）不可聚焦，也收不到按键：只显示数字，不显示 Esc 提示
+const isMirror = getCurrentWindow().label !== 'main'
 
 // 3 → 2 → 1：剩余毫秒由 Rust 推送，这里只做向上取整展示
 const seconds = computed(() => Math.max(1, Math.ceil(store.armingRemainingMs / 1000)))
@@ -17,7 +21,9 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', onKeydown)
+  if (!isMirror) {
+    window.addEventListener('keydown', onKeydown)
+  }
 })
 
 onUnmounted(() => {
@@ -28,8 +34,10 @@ onUnmounted(() => {
 <template>
   <main class="arming">
     <p class="arming__count num">{{ seconds }}</p>
-    <p class="arming__hint">此时取消还来得及（Esc）</p>
-    <p class="arming__note">切走窗口后 Esc 就无效了——全局拦截要到 M3 才生效。</p>
+    <template v-if="!isMirror">
+      <p class="arming__hint">此时取消还来得及（Esc）</p>
+      <p class="arming__note">切走窗口后 Esc 就无效了——全局拦截要到 M3 才生效。</p>
+    </template>
   </main>
 </template>
 

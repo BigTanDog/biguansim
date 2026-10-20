@@ -371,9 +371,7 @@ mod tests {
         let mut m = machine();
         arm_and_lock(&mut m, 60_000);
 
-        let outcome = m
-            .transition(SessionEvent::Tick, 59_999)
-            .expect("tick");
+        let outcome = m.transition(SessionEvent::Tick, 59_999).expect("tick");
 
         assert!(matches!(outcome, Outcome::Unchanged));
         assert_eq!(m.state(), SessionState::Locked);
@@ -385,9 +383,7 @@ mod tests {
         let mut m = machine();
         arm_and_lock(&mut m, 60_000);
 
-        let outcome = m
-            .transition(SessionEvent::Tick, 60_000)
-            .expect("tick");
+        let outcome = m.transition(SessionEvent::Tick, 60_000).expect("tick");
 
         match outcome {
             Outcome::Settled { result, session } => {

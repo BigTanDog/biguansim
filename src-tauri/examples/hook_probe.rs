@@ -32,6 +32,8 @@ const BIT_RWIN: u8 = 1 << 1;
 const BIT_ALT: u8 = 1 << 2;
 const BIT_CTRL: u8 = 1 << 3;
 const BIT_SHIFT: u8 = 1 << 4;
+/// Win 按住期间是否按过别的键（决定单击 Win 的抬起要不要吞）
+const BIT_WIN_USED: u8 = 1 << 5;
 
 static MODS: AtomicU8 = AtomicU8::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(true);
@@ -47,10 +49,8 @@ static RING_HEAD: AtomicUsize = AtomicUsize::new(0);
 fn push_event(vk: u16, is_down: bool, swallowed: bool) {
     let seq = RING_HEAD.fetch_add(1, Ordering::Relaxed);
     // 高 32 位存序号：读侧靠它区分"这一格是不是本轮写的"，避免与覆盖竞争
-    let packed = ((seq as u64) << 32)
-        | ((swallowed as u64) << 17)
-        | ((is_down as u64) << 16)
-        | vk as u64;
+    let packed =
+        ((seq as u64) << 32) | ((swallowed as u64) << 17) | ((is_down as u64) << 16) | vk as u64;
     RING[seq % RING_LEN].store(packed, Ordering::Release);
 }
 
@@ -91,6 +91,7 @@ fn decode(bits: u8) -> ModState {
         alt: bits & BIT_ALT != 0,
         ctrl: bits & BIT_CTRL != 0,
         shift: bits & BIT_SHIFT != 0,
+        win_used_other: bits & BIT_WIN_USED != 0,
     }
 }
 
@@ -111,21 +112,30 @@ fn encode(state: &ModState) -> u8 {
     if state.shift {
         bits |= BIT_SHIFT;
     }
+    if state.win_used_other {
+        bits |= BIT_WIN_USED;
+    }
     bits
 }
 
 fn main() {
+    // 用法：hook_probe [分钟数]，默认 5；测单条行为时可传 1
+    let minutes: u64 = std::env::args()
+        .nth(1)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5);
+
     println!("拦键探针已启动。");
-    println!("安全出口：Ctrl+Alt+Shift+Q，或 5 分钟后自动退出。");
+    println!("安全出口：Ctrl+Alt+Shift+Q，或 {minutes} 分钟后自动退出。");
     println!("每按一个键都会打印 PASS/SWALLOW，请按清单逐条试。");
 
     // 打印放在独立线程：钩子回调里只写无锁环，绝不碰 stdout
     spawn_reporter();
 
-    // 5 分钟自毁：即便钩子把退出组合键也吞了，也不会把人锁住
-    thread::spawn(|| {
-        thread::sleep(Duration::from_secs(300));
-        println!("\n[自动退出] 已到 5 分钟上限。");
+    // 自毁：即便钩子把退出组合键也吞了，也不会把人锁住
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(minutes * 60));
+        println!("\n[自动退出] 已到 {minutes} 分钟上限。");
         RUNNING.store(false, Ordering::SeqCst);
         let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
         if tid != 0 {

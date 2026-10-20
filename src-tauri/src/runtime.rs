@@ -24,6 +24,7 @@ use crate::core::session::{Outcome, SessionEvent, SessionMachine, SessionState, 
 use crate::core::store::{Record, SessionResult, SessionSnapshot, Store};
 use crate::core::timer::{MonotonicClock, Timer, WallClock};
 use crate::events::{ArmingTick, Chime, StateChanged, TimerTick};
+use crate::io_queue::IoJob;
 use crate::platform::log as plog;
 use crate::platform::time::{SystemMonotonic, SystemWall};
 use crate::platform::{overlay, power};
@@ -34,12 +35,6 @@ const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(15);
 const TICK_INTERVAL: Duration = Duration::from_millis(250);
 /// 末 10 秒三声轻滴答的触发点（PRD F-7.2）
 const CHIME_THRESHOLDS: [u64; 3] = [10_000, 7_000, 4_000];
-
-pub enum IoJob {
-    Snapshot(SessionSnapshot),
-    /// 正常出关：队列入队保证它排在所有快照之后，天然不会"删了又被写回"
-    ClearSnapshot,
-}
 
 pub struct RecoveredInfo {
     pub actual_ms: i64,
@@ -127,23 +122,10 @@ fn recover_previous(store: &Store) -> Option<RecoveredInfo> {
 }
 
 /// 常驻写盘线程：唯一写盘者。队列关闭（进程退出）时自然结束。
+/// 具体的消费循环在 `io_queue::run`，抽出去是为了能单测"先写后删"的顺序保证。
 fn spawn_io(store: Store, rx: Receiver<IoJob>) {
     thread::spawn(move || {
-        for job in rx {
-            match job {
-                IoJob::Snapshot(snapshot) => {
-                    if let Err(err) = store.save_session(&snapshot) {
-                        ::log::error!("[io] 写快照失败：{err}");
-                    }
-                }
-                IoJob::ClearSnapshot => {
-                    if let Err(err) = store.clear_session() {
-                        ::log::error!("[io] 删除快照失败：{err}");
-                    }
-                }
-            }
-        }
-        ::log::info!("[io] 队列已关闭，线程退出");
+        crate::io_queue::run(&store, rx);
     });
 }
 

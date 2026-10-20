@@ -3,6 +3,10 @@
 //! 为什么不能只做"按 VK 查表 return 1"：Windows 的组合键不是独立按键。
 //! 只吞 `Win` 会连带废掉要放行的 `Win+L`；不吞 `Win` 则 `Win+E/D/R/I/S/X` 全部照常生效。
 //!
+//! spike（decisions/004）实测结论：`Win` 按下放行、`Win+E` 吞掉之后，
+//! **单击 `Win` 的抬起仍会让系统弹出开始菜单并露出任务栏**。因此抬起要判：
+//! 整段按住期间没按过别的键 → 吞掉抬起（抑制开始菜单）；按过别的键 → 放行。
+//!
 //! 把判定抽成纯函数的好处：拦截策略可以用普通单测覆盖（TDD §8.2 里"组合键状态机
 //! 只能手工"因此缩小到只剩系统行为那一层——钩子是否真的吞掉了按键）。
 
@@ -15,6 +19,14 @@ pub const VK_LWIN: u16 = 0x5B;
 pub const VK_RWIN: u16 = 0x5C;
 pub const VK_F4: u16 = 0x73;
 
+/// 左右专用修饰键：低级钩子可能上报通用 VK，也可能上报这些（实测两者都会出现）
+const VK_LSHIFT: u16 = 0xA0;
+const VK_RSHIFT: u16 = 0xA1;
+const VK_LCONTROL: u16 = 0xA2;
+const VK_RCONTROL: u16 = 0xA3;
+const VK_LMENU: u16 = 0xA4;
+const VK_RMENU: u16 = 0xA5;
+
 /// 放行 `Win+L`（PRD F-3.4：允许锁屏离开）
 const VK_L: u16 = 0x4C;
 
@@ -25,6 +37,8 @@ pub struct ModState {
     pub alt: bool,
     pub ctrl: bool,
     pub shift: bool,
+    /// 本次 Win 按住期间是否按过别的键（用于判断"单击 Win"）
+    pub win_used_other: bool,
 }
 
 impl ModState {
@@ -41,28 +55,57 @@ pub enum Verdict {
     Pass,
 }
 
+fn is_ctrl(vk: u16) -> bool {
+    matches!(vk, VK_CONTROL | VK_LCONTROL | VK_RCONTROL)
+}
+
+fn is_shift(vk: u16) -> bool {
+    matches!(vk, VK_SHIFT | VK_LSHIFT | VK_RSHIFT)
+}
+
+fn is_alt(vk: u16) -> bool {
+    matches!(vk, VK_MENU | VK_LMENU | VK_RMENU)
+}
+
 /// 按键状态机的唯一判定入口。
 ///
 /// 调用约定：钩子回调里拿到 `WM_KEYDOWN/WM_SYSKEYDOWN`（`is_down = true`）与
 /// `WM_KEYUP/WM_SYSKEYUP`（`false`）时各调用一次，先更新状态再取判定结果。
 pub fn decide(vk: u16, is_down: bool, state: &mut ModState) -> Verdict {
-    // 1. 修饰键本身的按下/抬起必须先记账
+    // 1. 修饰键本身先记账（通用 VK 与左右专用 VK 都要认）
     match vk {
         VK_LWIN => state.lwin = is_down,
         VK_RWIN => state.rwin = is_down,
-        VK_MENU => state.alt = is_down,
-        VK_CONTROL => state.ctrl = is_down,
-        VK_SHIFT => state.shift = is_down,
+        _ if is_alt(vk) => state.alt = is_down,
+        _ if is_ctrl(vk) => state.ctrl = is_down,
+        _ if is_shift(vk) => state.shift = is_down,
         _ => {}
     }
 
-    // 2. Win 键本身必须放行——吞掉它系统就认为 Win 从未按下，Win+L 也就不成立
+    // 2. Win 键：按下必须放行（吞掉它系统就认为 Win 从未按下，Win+L 也就不会生效）；
+    //    抬起分情况——单击 Win 若放行，开始菜单会弹出来盖住任务栏（SP-4 实测）。
     if vk == VK_LWIN || vk == VK_RWIN {
-        return Verdict::Pass;
+        if is_down {
+            state.win_used_other = false;
+            return Verdict::Pass;
+        }
+
+        let suppress = !state.win_used_other;
+        if !state.any_win() {
+            state.win_used_other = false;
+        }
+        return if suppress {
+            Verdict::Swallow
+        } else {
+            Verdict::Pass
+        };
     }
 
     // 3. Win 按住期间：放行 L（Win+L），其余字母/功能键一律吞掉
     if state.any_win() {
+        if is_down {
+            state.win_used_other = true;
+        }
         return if is_down && vk == VK_L {
             Verdict::Pass
         } else {
@@ -129,14 +172,42 @@ mod tests {
         }
     }
 
+    /// SP-4：单击 Win 的抬起必须吞掉，否则开始菜单会弹出来盖住任务栏
     #[test]
-    fn single_win_release_does_not_stay_stuck() {
+    fn single_win_release_is_swallowed() {
         let mut st = ModState::default();
         press(&mut st, VK_LWIN);
-        assert_eq!(release(&mut st, VK_LWIN), Verdict::Pass);
-        assert!(!st.any_win());
-        // 抬起后字母键恢复放行
+
+        assert_eq!(release(&mut st, VK_LWIN), Verdict::Swallow);
+        assert!(!st.any_win(), "抬起后不得残留 Win 按住状态");
+    }
+
+    /// 单击 Win 之后，普通打字必须恢复正常
+    #[test]
+    fn typing_after_single_win_still_passes() {
+        let mut st = ModState::default();
+        press(&mut st, VK_LWIN);
+        release(&mut st, VK_LWIN);
+
         assert_eq!(press(&mut st, 0x41), Verdict::Pass);
+        assert_eq!(press(&mut st, 0x20), Verdict::Pass);
+    }
+
+    /// Win+L 之后 Win 的抬起要放行（这段按住期间用过别的键，不是"单击"）
+    #[test]
+    fn win_release_after_win_l_passes() {
+        let mut st = ModState::default();
+        press(&mut st, VK_LWIN);
+        press(&mut st, VK_L);
+        assert_eq!(release(&mut st, VK_LWIN), Verdict::Pass);
+    }
+
+    #[test]
+    fn win_release_after_other_key_passes() {
+        let mut st = ModState::default();
+        press(&mut st, VK_LWIN);
+        press(&mut st, 0x45);
+        assert_eq!(release(&mut st, VK_LWIN), Verdict::Pass);
     }
 
     #[test]
@@ -167,6 +238,23 @@ mod tests {
         press(&mut st, VK_CONTROL);
         press(&mut st, VK_SHIFT);
         assert_eq!(press(&mut st, VK_ESCAPE), Verdict::Swallow);
+    }
+
+    /// 低级钩子上报的是左右专用 VK 时，同样要认得出 Ctrl/Alt/Shift
+    #[test]
+    fn side_specific_modifier_vks_are_recognised() {
+        let mut st = ModState::default();
+        press(&mut st, VK_LCONTROL);
+        press(&mut st, VK_LSHIFT);
+        assert_eq!(
+            press(&mut st, VK_ESCAPE),
+            Verdict::Swallow,
+            "Ctrl+Shift+Esc"
+        );
+
+        let mut st = ModState::default();
+        press(&mut st, VK_LMENU);
+        assert_eq!(press(&mut st, VK_TAB), Verdict::Swallow, "Alt+Tab");
     }
 
     #[test]

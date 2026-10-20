@@ -2,6 +2,7 @@ pub mod app_state;
 pub mod commands;
 pub mod core;
 pub mod events;
+pub mod io_queue;
 pub mod platform;
 pub mod runtime;
 

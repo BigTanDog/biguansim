@@ -1,7 +1,10 @@
 // 钟鸣：用 Web Audio 合成，不引音频文件、不引依赖（M2 S3）。
-// 音量固定 0.6（PRD F-10.3 的上限），最终响度仍由系统混音决定。
+// 音量由 `config.chimeVolume` 决定，上限 0.6（PRD F-10.3），最终响度仍由系统混音决定。
 
 import type { Chime } from './ipc'
+
+/** 钟鸣的默认音量上限 */
+export const MAX_VOLUME = 0.6
 
 let context: AudioContext | null = null
 
@@ -17,32 +20,38 @@ export function ensureAudio(): void {
   }
 }
 
-/** 到点前的轻滴答：短促、略低 */
-export function playTick(): void {
-  tone(660, 0.09, 0.6)
-}
+export function playChime(chime: Chime, volume: number = MAX_VOLUME): void {
+  // 长时间锁屏后 WebView 可能把音频上下文挂起，播之前再恢复一次
+  if (context && context.state === 'suspended') {
+    void context.resume()
+  }
 
-/** 到点钟鸣：三声，基频 + 五度泛音，带回声感 */
-export function playBell(): void {
-  for (let index = 0; index < 3; index += 1) {
-    window.setTimeout(() => {
-      tone(440, 1.1, 0.6)
-      tone(660, 0.9, 0.28)
-    }, index * 650)
+  const level = Math.min(MAX_VOLUME, Math.max(0, volume))
+
+  if (chime.kind === 'bell') {
+    playBell(level)
+  } else {
+    // 单声滴答：一个振荡器，不会削波
+    tone(660, 0.09, level)
   }
 }
 
-export function playChime(chime: Chime): void {
-  if (chime.kind === 'bell') {
-    playBell()
-  } else {
-    playTick()
+/**
+ * 到点钟鸣：三声，基频 + 五度泛音。
+ * 每声的两个振荡器分别 0.55 / 0.25 倍音量，三声重叠时峰值仍 < 1.0，不会硬削波。
+ */
+function playBell(level: number): void {
+  for (let index = 0; index < 3; index += 1) {
+    window.setTimeout(() => {
+      tone(440, 1.1, level * 0.55)
+      tone(660, 0.9, level * 0.25)
+    }, index * 650)
   }
 }
 
 function tone(frequency: number, durationSec: number, peak: number): void {
   const audio = context
-  if (!audio) {
+  if (!audio || peak <= 0) {
     return
   }
 

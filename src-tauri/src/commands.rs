@@ -114,6 +114,10 @@ pub fn start_session(
         }
     };
 
+    // 必须先置 locked 再展开结界：overlay 里的置顶维持线程靠这个标志判断存活，
+    // 顺序颠倒的话它会先看到 false 然后直接退出，本次闭关就再也不会重申 TOPMOST。
+    state.set_locked(true);
+
     // 结界起不来就不进闭关（PRD D-7：绝不允许"看起来锁了其实没锁"）
     if let Err(err) = overlay::lock_screen(&app) {
         // 主屏可能已经被改成无边框置顶，必须回滚，否则留下一个关不掉的大窗
@@ -124,8 +128,6 @@ pub fn start_session(
         log::error!("[ipc] 入关失败，已回滚：{err}");
         return Err(format!("E_OVERLAY_FAILED: {err}"));
     }
-
-    state.set_locked(true);
 
     let _ = app.emit(
         "state://changed",

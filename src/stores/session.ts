@@ -73,7 +73,9 @@ export const useSessionStore = defineStore('session', () => {
       })
 
       await ipc.onChime((chime) => {
-        playChime(chime)
+        // 音量取配置（PRD F-10.3），上限 60%
+        const volume = Math.min(0.6, Math.max(0, config.value?.chimeVolume ?? 0.6))
+        playChime(chime, volume)
       })
 
       await ipc.onStateChanged((changed) => {
@@ -87,6 +89,10 @@ export const useSessionStore = defineStore('session', () => {
             phase.value = 'lock'
             targetMs.value = changed.targetMs
             goal.value = changed.goal
+            // 首帧就要有数字：否则要等第一次 tick（≤250 ms）才从 00:00 跳过来
+            remainingMs.value = changed.targetMs
+            elapsedMs.value = 0
+            clockSkewMin.value = 0
             break
           case 'Settled':
             phase.value = 'settled'

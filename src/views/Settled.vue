@@ -41,7 +41,6 @@ function again(): void {
 
     <div class="settled__actions">
       <button class="btn btn--primary" type="button" @click="again">再入一关</button>
-      <button class="btn" type="button" @click="again">回到配置</button>
     </div>
 
     <p class="settled__todo">累计时长、连续天数与长老评语将在 M5 补齐。</p>
