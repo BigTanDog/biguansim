@@ -11,8 +11,8 @@ use crate::core::session::{Outcome, SessionEvent, SessionState};
 use crate::core::store::Config;
 use crate::core::timer::{MonotonicClock, WallClock};
 use crate::events::StateChanged;
-use crate::platform::overlay;
 use crate::platform::time::{SystemMonotonic, SystemWall};
+use crate::platform::{hook, overlay};
 use crate::runtime::Runtime;
 
 const MIN_DURATION_MIN: u32 = 15;
@@ -114,14 +114,24 @@ pub fn start_session(
         }
     };
 
+    // 先装钩子：装不上就绝不进闭关（PRD D-7，绝不允许"看起来锁了其实没锁"）
+    if let Err(err) = hook::install() {
+        if let Ok(mut machine) = runtime.machine.lock() {
+            machine.reset();
+        }
+        log::error!("[ipc] 钩子安装失败，拒绝入关：{err}");
+        return Err(format!("E_HOOK_FAILED: {err}"));
+    }
+    hook::reset_state();
+
     // 必须先置 locked 再展开结界：overlay 里的置顶维持线程靠这个标志判断存活，
     // 顺序颠倒的话它会先看到 false 然后直接退出，本次闭关就再也不会重申 TOPMOST。
     state.set_locked(true);
 
-    // 结界起不来就不进闭关（PRD D-7：绝不允许"看起来锁了其实没锁"）
     if let Err(err) = overlay::lock_screen(&app) {
         // 主屏可能已经被改成无边框置顶，必须回滚，否则留下一个关不掉的大窗
         overlay::unlock_screen(&app);
+        hook::uninstall();
         if let Ok(mut machine) = runtime.machine.lock() {
             machine.reset();
         }
@@ -176,6 +186,7 @@ pub fn cancel_arming(
     }
 
     app_state.set_locked(false);
+    hook::uninstall();
     overlay::unlock_screen(&app);
 
     let _ = app.emit(
@@ -228,4 +239,40 @@ pub fn get_state(runtime: State<'_, Arc<Runtime>>) -> StateView {
         attempts: session.as_ref().map(|s| s.attempts).unwrap_or(0),
         clock_skew_min: skew,
     }
+}
+
+/// 开发期逃生口：**只在 debug 构建里存在**（release 编译期剔除）。
+/// 本地测试时不必等闭关结束；不写记录、不计入统计。
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn dev_abort(
+    app: AppHandle,
+    runtime: State<'_, Arc<Runtime>>,
+    app_state: State<'_, AppState>,
+) -> Result<(), String> {
+    if let Ok(mut machine) = runtime.machine.lock() {
+        machine.reset();
+    }
+    if let Ok(mut timer) = runtime.timer.lock() {
+        *timer = None;
+    }
+
+    app_state.set_locked(false);
+    hook::uninstall();
+    overlay::unlock_screen(&app);
+    let _ = runtime.io_tx.send(crate::io_queue::IoJob::ClearSnapshot);
+
+    let _ = app.emit(
+        "state://changed",
+        StateChanged {
+            state: SessionState::Idle.as_str().to_string(),
+            result: None,
+            goal: None,
+            elapsed_ms: 0,
+            target_ms: 0,
+        },
+    );
+
+    log::warn!("[dev] 手动退出（不写记录）");
+    Ok(())
 }

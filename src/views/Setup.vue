@@ -99,7 +99,8 @@ function pick(preset: number): void {
     </button>
 
     <p class="footnote">
-      M1 版本：破戒通道尚未启用，如需退出请用任务管理器结束进程（会记为「异常中断」）。
+      当前版本：结界已接入键盘拦截，但长按 Esc
+      破戒的流程尚未接上（M4）。闭关中如需退出，请用任务管理器结束进程（会记为「异常中断」）。
     </p>
   </main>
 </template>

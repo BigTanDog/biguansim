@@ -92,3 +92,9 @@ export const onChime = (handler: (chime: Chime) => void): Promise<UnlistenFn> =>
 
 /** 起势 3 秒内取消；非 Arming 状态会返回 E_STATE_ILLEGAL */
 export const cancelArming = (): Promise<void> => invoke('cancel_arming')
+
+/**
+ * 开发期逃生口：仅 debug 构建存在（release 里命令未注册，调用会报错）。
+ * 不写记录、不计入统计。
+ */
+export const devAbort = (): Promise<void> => invoke('dev_abort')

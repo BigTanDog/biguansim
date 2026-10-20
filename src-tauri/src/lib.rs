@@ -14,7 +14,7 @@ pub fn run() {
     platform::log::init();
     ::log::info!("启动 biguansim {}", env!("CARGO_PKG_VERSION"));
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(app_state::AppState::default())
         // F-1.7：第二次启动只唤前台；锁定期间第二实例什么都不做
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -33,13 +33,28 @@ pub fn run() {
                 let _ = window.set_focus();
                 ::log::info!("第二次启动：已唤到前台");
             }
-        }))
-        .invoke_handler(tauri::generate_handler![
-            commands::bootstrap,
-            commands::start_session,
-            commands::cancel_arming,
-            commands::get_state
-        ])
+        }));
+
+    // dev_abort 只在 debug 构建里注册；release 里这条命令根本不存在，
+    // 不可能成为正式版的逃逸通道。
+    #[cfg(debug_assertions)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::bootstrap,
+        commands::start_session,
+        commands::cancel_arming,
+        commands::get_state,
+        commands::dev_abort
+    ]);
+
+    #[cfg(not(debug_assertions))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::bootstrap,
+        commands::start_session,
+        commands::cancel_arming,
+        commands::get_state
+    ]);
+
+    builder
         .setup(|app| {
             let handle = app.handle().clone();
             let runtime = runtime::init(&handle);

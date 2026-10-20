@@ -3,12 +3,20 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { computed, onUnmounted, ref } from 'vue'
 
 import { formatClockLabel, formatCountdown, formatElapsed, SKEW_THRESHOLD_MIN } from '../lib/format'
+import * as ipc from '../lib/ipc'
 import { useSessionStore } from '../stores/session'
 
 const store = useSessionStore()
 
 // 副屏窗口 label 是 display-N：只渲染环与倒计时，不承载任何交互（TDD §4.3）
 const isMirror = getCurrentWindow().label !== 'main'
+
+/** 开发期逃生口：只有 dev 构建显示，release 里既无按钮也无命令 */
+const devMode = import.meta.env.DEV
+
+function devExit(): void {
+  void ipc.devAbort()
+}
 
 const RADIUS = 92
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS
@@ -54,9 +62,14 @@ const clockSuspect = computed(() => Math.abs(store.clockSkewMin) > SKEW_THRESHOL
       <p class="dialog__speaker">长老</p>
       <p class="dialog__line">道友，且坐。此关已开，莫问还有几时——问，便是想走。</p>
       <p class="dialog__line dialog__line--muted">
-        本版破戒通道尚未启用：如需退出，请用任务管理器结束进程，本次将记为「异常中断」，时长仍计入累计。
+        本版破戒通道尚未接入（长按 Esc
+        无效）：如需退出，请用任务管理器结束进程，本次将记为「异常中断」，时长仍计入累计。
       </p>
     </section>
+
+    <button v-if="devMode && !isMirror" class="dev-exit" type="button" @click="devExit">
+      DEV 退出（不记录）
+    </button>
 
     <p
       v-if="!isMirror"
@@ -188,5 +201,18 @@ const clockSuspect = computed(() => Math.abs(store.clockSkewMin) > SKEW_THRESHOL
 
 .clock--warn {
   color: #d4695f;
+}
+
+.dev-exit {
+  position: absolute;
+  right: 16px;
+  bottom: 30px;
+  padding: 4px 10px;
+  border: 1px dashed #6b6357;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: #8c8375;
+  font-size: 11px;
+  cursor: pointer;
 }
 </style>

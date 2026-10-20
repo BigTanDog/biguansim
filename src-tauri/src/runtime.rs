@@ -27,7 +27,7 @@ use crate::events::{ArmingTick, Chime, StateChanged, TimerTick};
 use crate::io_queue::IoJob;
 use crate::platform::log as plog;
 use crate::platform::time::{SystemMonotonic, SystemWall};
-use crate::platform::{overlay, power};
+use crate::platform::{hook, overlay, power};
 
 /// 快照落盘间隔（TDD §4.8）
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(15);
@@ -350,6 +350,7 @@ pub fn finish(
         state.set_locked(false);
     }
 
+    hook::uninstall();
     overlay::unlock_screen(app);
 
     let record = Record {
