@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 版本 | v0.1-rev1（评审修订） |
+| 版本 | v0.1-rev2（M2 同步：四态状态机、起势与钟鸣事件、tick/io 常驻线程与锁序、spike 结论） |
 | 日期 | 2026-10-19 |
 | 对应需求 | `闭关模拟器-PRD-v0.1.md`（v0.1-rev3） |
 | 状态 | 定稿（作为 M1–M5 的实现依据） |
@@ -61,8 +61,16 @@
 | 2 | hook | 低级键盘钩子 + `GetMessage` 循环 | 回调内**只做 VK 比对**，禁止 IO/分配/加锁，< 100 µs |
 | 3 | focus | `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` + 消息循环 | 抢回失败 3 次转降级策略 |
 | 4 | power | 订阅挂起/恢复通知 + `SetThreadExecutionState` | 启动与清除必须在**同一线程** |
-| 5 | tick | 250 ms 节拍，驱动计时与 UI 推送 | 只读时钟，不做 IO |
-| 6 | io | 落盘队列（原子写、异步） | 15 s 一次 session 快照 |
+| 5 | tick | 250 ms 节拍，驱动计时、起势倒计时、钟鸣触发点与 UI 推送 | 只读时钟，不做 IO |
+| 6 | io | 落盘队列的唯一消费者（原子写、异步） | 15 s 一次 session 快照；出关用入队删除 |
+
+**tick 与 io 是进程级常驻线程（M1 的 P0 结论，务必保留）**：
+
+- 两条线程**只在进程退出时结束**，任何出关路径都**不得**停线程。第一版在 `teardown()` 里停掉 tick/io 且不重建，导致第二次入关倒计时冻结、永不结算、窗口又关不掉——直接违反"绝不锁死"。
+- 空闲期由各自的任务判断跳过（tick 看 `machine.state()`，io 阻塞在 `recv`）。
+- 出关删快照**不是**直接删文件，而是向 io 队列投递 `IoJob::ClearSnapshot`：队列有序即"先写后删"，不依赖任何轮询等待，慢盘也不会出现"删了又被写回"。
+- **锁顺序全项目统一为 `timer → machine`**，且 timer 的 guard 必须在取 machine 之前释放；`build_snapshot`/`get_state`/tick 三处都遵循。反序会 ABBA 死锁（表现为倒计时冻结 + IPC 挂起）。
+- `AppState.locked` 只是给窗口事件与置顶维持线程用的**快速镜像**，true 只由 `start_session` 在展开结界**之前**置位（否则 keeper 线程可能先看到 false 直接退出），`unlock_screen` 幂等清零。
 
 > 钩子与焦点为什么不能放主线程：两者都需要消息循环，且回调一旦阻塞主线程会连带卡住 UI 与 Tauri IPC。独立线程是唯一稳妥做法。
 
@@ -99,7 +107,9 @@
 | `core::stats` | 累计/连续天数/破戒/有效日 | `summary(today) -> Stats` |
 | `core::quote` | 语料加载、阶段选择、变量渲染、防重复 | `pick(stage, kind, vars) -> String` |
 | `core::store` | 配置/流水/快照的读写与迁移 | `atomic_write(path, bytes)`、`append_jsonl()` |
-| `platform::hook` | 键盘钩子安装/卸载、拦截表、按键状态机、60 s 周期重装、Esc 长按时间戳 | `install() -> Result<Guard>`、`esc_hold_ms() -> u64` |
+| `io_queue` | 落盘队列的唯一消费者（进程级常驻） | `run(store, rx)`、`IoJob::{Snapshot, ClearSnapshot}` |
+| `platform::keyfilter` | 按键判定**纯函数**（不含任何系统调用，可单测） | `decide(vk, is_down, &mut ModState) -> Swallow/Pass` |
+| `platform::hook` | 键盘钩子安装/卸载、拦截表、60 s 周期重装、Esc 长按时间戳 | `install() -> Result<Guard>`、`esc_hold_ms() -> u64` |
 | `platform::overlay` | 多屏窗口创建、置顶、销毁 | `show_all() -> Vec<WindowId>`、`hide_all()` |
 | `platform::focus` | 前台窗口监听与抢回 | `arm(targets) / disarm()` |
 | `platform::power` | 阻止睡眠、订阅挂起/恢复 | `block_sleep() -> Guard`、`watch(cb)` |
@@ -235,6 +245,13 @@ Windows 的组合键不是独立按键，只按 VK 查表会出现两种必然�
 
 > **M3 的第一件事是 spike（半天）**：只验证五件事——`Win+L` 可放行、`Win+E` 被拦、`Alt+Tab` 被拦、**单按 Win 不弹开始菜单**、正常中英文打字与输入法切换不受影响。五项同时成立才继续；不成立就退回"只拦 `Alt+Tab` + `Ctrl+Esc` + `Ctrl+Shift+Esc` + `Alt+F4`"的最小集合，并把 `Win` 组合键列入 §11 的残余风险，不要硬扛。
 
+**spike 实测结论（2026-10-20，前移到 M1 末尾执行）**：
+
+- `Win+L`、`Win+E`、`Alt+Tab` 符合预期，正常打字与输入法不受影响；
+- **单击 `Win` 会弹出开始菜单并露出任务栏**（原方案放行 `Win` 的抬起）。修法：`Win` 按下仍放行（否则 `Win+L` 不成立），**抬起时分情况**——整段按住期间没按过别的键就吞掉抬起，按过别的键则放行；
+- 低级钩子会上报**左右专用修饰键 VK**（`VK_LCONTROL 0xA2` 等），状态机必须同时认通用与专用两种，否则 `Alt+Tab`/`Ctrl+Shift+Esc` 判定失效、探针的安全退出组合键也失效。
+- 参见 `docs/decisions/004-拦键状态机结论.md`。
+
 ### 4.5 抢焦点
 
 - `SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT)`，回调在**安装该钩子的线程**（线程 3）的消息队列里投递，因此线程 3 必须有消息循环且不得阻塞——回调被阻塞等于抢焦点失效。
@@ -288,7 +305,8 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 | 命令 | 入参 | 返回 | 说明 |
 |---|---|---|---|
 | `bootstrap` | — | `{ config, stats, todayValid, lastSession }` | 启动时一次 |
-| `start_session` | `{ durationMin, goal?, bankId }` | `{ ok, sessionId }` \| `{ error }` | 失败码见 §5.3 |
+| `start_session` | `{ durationMin, goal?, bankId }` | `{ ok, sessionId }` \| `{ error }` | **只进 `Arming`**，3 秒后由 tick 线程转 `Locked`；失败码见 §5.3。成功时写回 `config.lastDurationMin` |
+| `cancel_arming` | — | `{}` \| `{ error }` | `Arming` → `Idle`（F-2.2）；非 `Arming` 返回 `E_STATE_ILLEGAL` |
 | `request_unlock` | — | `{ cooldownMs, attempt }` | Locked → Cool |
 | `get_current_question` | — | `{ index, total, question }` | **仅用于前端重连/重绘**；抽题与推进由 Rust 在状态转移时主动推 `question://changed`，前端不得用它来"请求下一题" |
 | `submit_choice` | `{ questionId, choice }` | `{ correct, needsCopy, nextQuestion? }` | **判定在 Rust**。`choice` 是**打乱后的展示索引（0–3）**，Rust 内部映射回原始 `answer`；越界返回 `E_INVALID_CHOICE` |
@@ -313,8 +331,10 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 
 | 事件 | 载荷 | 频率 |
 |---|---|---|
-| `state://changed` | `{ state, since, payload }` | 状态转移时 |
-| `timer://tick` | `{ elapsedMs, remainingMs, clockSkewMin }` | 250 ms |
+| `state://changed` | `{ state, result?, goal, elapsedMs, targetMs }` | 状态转移时（含 `Arming`/`Locked`/`Settled`/`Idle`） |
+| `timer://tick` | `{ elapsedMs, remainingMs, clockSkewMin }` | 250 ms（仅 `Locked`） |
+| `arming://tick` | `{ remainingMs }` | 250 ms（仅 `Arming`，由 Rust 计时，前端只渲染 3-2-1） |
+| `chime://play` | `{ kind: "tick" \| "bell", index }` | 剩余 10/7/4 秒各一次 `tick`；到点一次 `bell`（前端连响 3 声） |
 | `quote://changed` | `{ speaker, lines[], tone }` | 换语料时 |
 | `question://changed` | `{ index, total, question }` | 抽题/换题时 |
 | `notice://toast` | `{ level, text }` | 按需（如"钩子已重装"） |
@@ -352,17 +372,20 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 
 ## 6. 状态机实现
 
-PRD §5 的状态与转移表**原样迁入**，此处只补四条实现约定：
+PRD §5 的状态与转移表**原样迁入**，此处只补实现约定（M2 已落地前四条）：
 
-1. **单一入口**：所有转移必须经过 `session::transition(event)`，函数内部查表校验合法性；非法转移返回 `E_STATE_ILLEGAL` 并记日志。
+1. **单一入口**：所有转移必须经过 `session::transition(event, elapsed_ms)`，函数内部校验合法性；非法转移返回 `E_STATE_ILLEGAL` 并记日志。
+   - **起势两段式**：`Start` 只把状态推到 `Arming`（记录 `startedAtMs` 与 `armed_at_mono_ms`），3 秒后由 tick 线程发 `ArmFinished` 才进 `Locked` 并创建计时器；`Cancel` 只在 `Arming` 合法（F-2.2）。
+   - **到点判定的前置条件必须是 `state == Locked && session.is_some() && elapsed >= target`**。漏了 `Locked` 前置，`Arming` 期间（计时器尚未启动）就会误结算；漏了 `session.is_some()`，`Idle` 下 remaining 天然为 0 也会误结算。
 2. **副作用集中在 `teardown()`，且顺序固定不可调换**：任何离开 Locked 的路径（到点 / 答题 / 抄写 / 紧急 / 显示变化 / 崩溃恢复）都必须走同一个 `teardown()`：
-   1. `io::stop_and_join()` —— **先停落盘队列**。否则队列里那次 15 s 快照会在删文件之后把 `session.json` 写回来，下次启动误判 `Recovered`，白记一条 `interrupted`（偶发、极难查）；
+   0. 清 `AppState.locked`（让置顶维持线程先退，否则它会在 unlock 之后把窗口重新置顶）；
+   1. **不停止 tick/io 线程**（它们是进程级的，见 §1.3）；出关的落盘收尾一律通过队列表达：`IoJob::ClearSnapshot` 入队即"排在所有快照之后删除"；
    2. 卸载键盘钩子、停止抢焦点监听；
    3. 清电源状态（**同一线程** `ES_CONTINUOUS`）；
    4. 还原亮度，成功则删除 `display_baseline.json`；
-   5. 销毁副屏窗口，主窗口退出 Lock 视图；
-   6. **同步**追加 `records.jsonl`（出关记录在这一步落盘，失败走 `E_STORE_FAILED` 横幅）；
-   7. 删除 `session.json`。
+   5. 销毁副屏窗口，主窗口退出 Lock 视图并恢复原生标题栏；
+   6. **同步**追加 `records.jsonl`（出关记录在这一步落盘，失败走 `E_STORE_FAILED` 横幅）；`endedAtMs` 取**结束时刻的墙钟**，不用 `startedAt + elapsed`（后者在被改过时间后是错的）；
+   7. 投递 `IoJob::ClearSnapshot` 删除 `session.json`。
 
    **禁止在分支里各写一套清理逻辑**（这是这类软件"漏还原导致系统状态残留"的常见来源）。
 3. **状态与投影分离**：`Locked/Cool/Challenge/Copying/Confirming` 五种状态共用同一个全屏窗口与同一个 `Lock.vue`，仅 `payload` 不同。切换状态不重建窗口。
@@ -527,9 +550,9 @@ biguansim/
 
 | 阶段 | 模块 | 可独立验证的产出 |
 |---|---|---|
-| M1 | `platform::overlay` + `core::timer` + `core::store` + `platform::power::watch`（只订阅挂起/恢复，不阻止睡眠） | 能全屏锁住、多屏覆盖、计时准、杀进程不续锁、挂起/恢复事件进日志 |
+| M1 | `platform::overlay` + `core::timer` + `core::store` + `platform::power::watch`（只订阅挂起/恢复，不阻止睡眠）+ **拦键 spike（原在 M3，2026-10-19 前移）** | 能全屏锁住、多屏覆盖、计时准、杀进程不续锁、挂起/恢复事件进日志；spike 五项有明确结论 |
 | M2 | `core::session` + `events` + `Lock.vue` + 钟鸣 | 到点自动解锁全流程 |
-| M3 | 先做 §4.4 按键状态机 spike（半天）；再 `platform::hook/focus/power/brightness/display` | spike 五项全过；快捷键失效、熄屏唤醒正常、拔屏出关 |
+| M3 | `platform::hook`（复用 M1 的 `keyfilter`）、`focus/power/brightness/display` | 快捷键失效（含单击 Win 不弹开始菜单）、熄屏唤醒正常、拔屏出关 |
 | M4 | `core::cost/bank` + `Challenge` 投影 + 抄写 | 冷却与成本递增全链路 |
 | M5 | `core::stats/quote` + 记录/题库/设置/引导页 | 60 题 + 语料 180 条 + 抄写段 10 段 + 7 个页面 |
 
