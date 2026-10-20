@@ -16,8 +16,10 @@ coverage/
 
 # --- Rust / Tauri ---
 src-tauri/target/
-src-tauri/gen/schemas/        # tauri build 自动生成的 capability schema
-*.pdb                         # 保留本地排查用，不进仓
+# tauri build 自动生成的 capability schema（编辑器提示用，随构建重建）
+src-tauri/gen/schemas/
+# 调试符号保留本地排查，不进仓
+*.pdb
 *.exe
 *.dll
 *.rlib

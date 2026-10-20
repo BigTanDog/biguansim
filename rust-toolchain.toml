@@ -1,0 +1,5 @@
+[toolchain]
+# 锁死具体版本，不用 "stable" 浮动标签（AGENTS §1）
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
