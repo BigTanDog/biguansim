@@ -81,7 +81,8 @@ pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
         window.show().map_err(|e| e.to_string())?;
     }
 
-    state.set_locked(true);
+    // 注意：`AppState.locked` 只由 commands::start_session 与 runtime::finish 设置，
+    // overlay 不写它——否则同一个事实会有三个写入点（machine.state / AppState / timer）。
     log::info!("结界已展开，共 {} 块屏", rects.len());
 
     spawn_topmost_keeper(app.clone());
@@ -89,8 +90,6 @@ pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn unlock_screen(app: &AppHandle) {
-    app.state::<AppState>().set_locked(false);
-
     for (label, window) in app.webview_windows() {
         if label.starts_with(SECONDARY_PREFIX) {
             let _ = window.close();

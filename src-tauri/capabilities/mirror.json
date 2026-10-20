@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mirror",
+  "description": "副屏镜像窗口：只读渲染，只需要事件监听与窗口基础能力（不给 IPC 写入类权限）",
+  "windows": ["display-*"],
+  "permissions": ["core:event:default", "core:window:default"]
+}

@@ -113,10 +113,12 @@ pub fn start_session(
 
     // 结界起不来就不进闭关（PRD D-7：绝不允许"看起来锁了其实没锁"）
     if let Err(err) = overlay::lock_screen(&app) {
+        // 主屏可能已经被改成无边框置顶，必须回滚，否则留下一个关不掉的大窗
+        overlay::unlock_screen(&app);
         if let Ok(mut machine) = runtime.machine.lock() {
             machine.reset();
         }
-        log::error!("入关失败：{err}");
+        log::error!("[ipc] 入关失败，已回滚：{err}");
         return Err(format!("E_OVERLAY_FAILED: {err}"));
     }
 
@@ -127,10 +129,15 @@ pub fn start_session(
 
     state.set_locked(true);
 
-    // 首写快照（PRD §5.2：进入 Locked 时写）
+    // 首写快照（PRD §5.2：进入 Locked 时写）。
+    // 走 io 队列而不是直接写盘：io 线程是唯一写盘者，直接写会和它抢同一个 .tmp
     let snapshot = crate::runtime::build_snapshot(&runtime, 0);
-    if let Err(err) = runtime.store.save_session(&snapshot) {
-        log::error!("首写快照失败：{err}");
+    if runtime
+        .io_tx
+        .send(crate::runtime::IoJob::Snapshot(snapshot))
+        .is_err()
+    {
+        log::error!("[ipc] io 队列不可用，首写快照失败");
     }
 
     let _ = app.emit(
@@ -153,12 +160,7 @@ pub fn start_session(
 
 #[tauri::command]
 pub fn get_state(runtime: State<'_, Arc<Runtime>>) -> StateView {
-    let machine = runtime.machine.lock().ok();
-    let state = machine
-        .as_ref()
-        .map(|m| m.state())
-        .unwrap_or(SessionState::Idle);
-
+    // 锁顺序固定为 timer → machine，且 timer 的 guard 在取 machine 之前释放
     let (elapsed, skew) = match runtime.timer.lock() {
         Ok(guard) => match guard.as_ref() {
             Some(timer) => (timer.elapsed_ms(), timer.skew_min()),
@@ -167,7 +169,13 @@ pub fn get_state(runtime: State<'_, Arc<Runtime>>) -> StateView {
         Err(_) => (0, 0),
     };
 
-    let session = machine.as_ref().and_then(|m| m.session()).cloned();
+    let (state, session) = {
+        let machine = runtime.machine.lock().ok();
+        match machine.as_ref() {
+            Some(machine) => (machine.state(), machine.session().cloned()),
+            None => (SessionState::Idle, None),
+        }
+    };
 
     StateView {
         state: state.as_str().to_string(),

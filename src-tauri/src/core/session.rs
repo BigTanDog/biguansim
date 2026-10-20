@@ -56,9 +56,7 @@ pub enum SessionEvent {
         goal: Option<String>,
         bank: String,
     },
-    Tick {
-        elapsed_ms: u64,
-    },
+    Tick,
     /// 到点或异常主动结算
     Finish {
         result: SessionResult,
@@ -144,7 +142,7 @@ impl SessionMachine {
                 Ok(Outcome::Locked)
             }
             // 单纯的心跳不改状态；到点已在函数开头统一处理
-            SessionEvent::Tick { .. } => Ok(Outcome::Unchanged),
+            SessionEvent::Tick => Ok(Outcome::Unchanged),
             SessionEvent::Finish { result } => {
                 if self.session.is_none() {
                     return Err(SessionError::StateIllegal);
@@ -228,7 +226,7 @@ mod tests {
         let mut m = machine();
 
         let outcome = m
-            .transition(SessionEvent::Tick { elapsed_ms: 0 }, 0)
+            .transition(SessionEvent::Tick, 0)
             .expect("Idle 下的 tick 不是非法事件");
 
         assert!(matches!(outcome, Outcome::Unchanged));
@@ -241,7 +239,7 @@ mod tests {
         start(&mut m, 60_000);
 
         let outcome = m
-            .transition(SessionEvent::Tick { elapsed_ms: 59_999 }, 59_999)
+            .transition(SessionEvent::Tick, 59_999)
             .expect("tick");
 
         assert!(matches!(outcome, Outcome::Unchanged));
@@ -255,7 +253,7 @@ mod tests {
         start(&mut m, 60_000);
 
         let outcome = m
-            .transition(SessionEvent::Tick { elapsed_ms: 60_000 }, 60_000)
+            .transition(SessionEvent::Tick, 60_000)
             .expect("tick");
 
         match outcome {
@@ -311,7 +309,7 @@ mod tests {
         let mut m = machine();
         start(&mut m, 1_000);
         let _ = m
-            .transition(SessionEvent::Tick { elapsed_ms: 1_000 }, 1_000)
+            .transition(SessionEvent::Tick, 1_000)
             .expect("tick");
         assert_eq!(m.state(), SessionState::Settled);
 

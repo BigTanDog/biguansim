@@ -11,7 +11,7 @@
 //!
 //! 运行：`cargo run --manifest-path src-tauri/Cargo.toml --example hook_probe`
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -24,7 +24,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_SYSKEYUP,
 };
 
-use biguansim_lib::platform::keyfilter::{decide, ModState, Verdict, VK_MENU};
+use biguansim_lib::platform::keyfilter::{decide, ModState, Verdict};
 
 /// 修饰键状态用位图存在原子里：钩子回调里不加锁（AGENTS §6）
 const BIT_LWIN: u8 = 1 << 0;
@@ -36,6 +36,53 @@ const BIT_SHIFT: u8 = 1 << 4;
 static MODS: AtomicU8 = AtomicU8::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+/// 回调里**不允许**打印：控制台写入可达毫秒级，一旦超过 `LowLevelHooksTimeout`
+/// （默认 1 s）钩子会被系统静默摘除，SP-3/SP-5 就会"假失败"。
+/// 所以回调只往这个无锁环里塞一条记录，另开线程读出来打印。
+const RING_LEN: usize = 256;
+static RING: [AtomicU64; RING_LEN] = [const { AtomicU64::new(0) }; RING_LEN];
+static RING_HEAD: AtomicUsize = AtomicUsize::new(0);
+
+fn push_event(vk: u16, is_down: bool, swallowed: bool) {
+    let seq = RING_HEAD.fetch_add(1, Ordering::Relaxed);
+    // 高 32 位存序号：读侧靠它区分"这一格是不是本轮写的"，避免与覆盖竞争
+    let packed = ((seq as u64) << 32)
+        | ((swallowed as u64) << 17)
+        | ((is_down as u64) << 16)
+        | vk as u64;
+    RING[seq % RING_LEN].store(packed, Ordering::Release);
+}
+
+/// 把环里的按键记录搬到 stdout，与钩子回调解耦
+fn spawn_reporter() {
+    thread::spawn(|| {
+        let mut cursor = 0usize;
+        loop {
+            let head = RING_HEAD.load(Ordering::Acquire);
+
+            while cursor < head {
+                let packed = RING[cursor % RING_LEN].load(Ordering::Acquire);
+                if (packed >> 32) as usize == cursor {
+                    let vk = (packed & 0xFFFF) as u16;
+                    let is_down = (packed >> 16) & 1 == 1;
+                    let swallowed = (packed >> 17) & 1 == 1;
+                    println!(
+                        "{:<7} vk=0x{vk:02X} {}",
+                        if swallowed { "SWALLOW" } else { "PASS" },
+                        if is_down { "down" } else { "up  " }
+                    );
+                }
+                cursor += 1;
+            }
+
+            if !RUNNING.load(Ordering::SeqCst) && cursor >= head {
+                break;
+            }
+            thread::sleep(Duration::from_millis(15));
+        }
+    });
+}
 
 fn decode(bits: u8) -> ModState {
     ModState {
@@ -71,6 +118,9 @@ fn main() {
     println!("拦键探针已启动。");
     println!("安全出口：Ctrl+Alt+Shift+Q，或 5 分钟后自动退出。");
     println!("每按一个键都会打印 PASS/SWALLOW，请按清单逐条试。");
+
+    // 打印放在独立线程：钩子回调里只写无锁环，绝不碰 stdout
+    spawn_reporter();
 
     // 5 分钟自毁：即便钩子把退出组合键也吞了，也不会把人锁住
     thread::spawn(|| {
@@ -140,24 +190,14 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     let verdict = decide(vk, is_down, &mut state);
     MODS.store(encode(&state), Ordering::Relaxed);
 
-    // 安全出口：Ctrl+Alt+Shift+Q
+    // 安全出口：Ctrl+Alt+Shift+Q。只做原子操作与投递消息，不打印
     if is_down && vk == 0x51 && state.ctrl && state.alt && state.shift && !state.any_win() {
-        println!("\n[安全退出] Ctrl+Alt+Shift+Q");
         RUNNING.store(false, Ordering::SeqCst);
         PostThreadMessageW(HOOK_THREAD_ID.load(Ordering::SeqCst), WM_QUIT, 0, 0);
         return 1;
     }
 
-    let label = if vk == VK_MENU { "ALT" } else { "" };
-    println!(
-        "{:<7} vk=0x{vk:02X} {} {}",
-        match verdict {
-            Verdict::Swallow => "SWALLOW",
-            Verdict::Pass => "PASS",
-        },
-        if is_down { "down" } else { "up  " },
-        label
-    );
+    push_event(vk, is_down, matches!(verdict, Verdict::Swallow));
 
     match verdict {
         Verdict::Swallow => 1,

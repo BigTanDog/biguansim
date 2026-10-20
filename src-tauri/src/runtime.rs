@@ -5,10 +5,14 @@
 //! - io：唯一写盘者，串行消费队列
 //! - power：消费系统挂起/恢复事件，喂给计时器
 //!
-//! `teardown()` 顺序固定：先停 tick（切断新的快照来源）→ 再停 io（排空队列）
-//! → 收起结界 → 同步追加记录 → 删除快照。顺序颠倒就会出现"删了又被写回"。
+//! **tick 与 io 是进程级线程，不随单次闭关结束**。第一版把它们在 `finish()` 里停掉，
+//! 结果第二次入关没有 tick 线程，倒计时冻结、永不结算、窗口又关不掉——直接违反
+//! "绝不锁死"。现在它们是常驻线程：空闲时 tick 自己跳过，io 靠队列有序保证
+//! "先写快照、后删快照"，不需要任何轮询等待。
+//!
+//! 锁顺序全项目统一（否则会 ABBA 死锁）：**先 timer、后 machine**，
+//! 且 timer 的 guard 必须在取 machine 之前 drop。
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -18,7 +22,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::core::session::{Outcome, SessionEvent, SessionMachine, SessionState};
 use crate::core::store::{Record, SessionResult, SessionSnapshot, Store};
-use crate::core::timer::Timer;
+use crate::core::timer::{Timer, WallClock};
 use crate::events::{StateChanged, TimerTick};
 use crate::platform::log as plog;
 use crate::platform::time::{SystemMonotonic, SystemWall};
@@ -31,7 +35,8 @@ const TICK_INTERVAL: Duration = Duration::from_millis(250);
 
 pub enum IoJob {
     Snapshot(SessionSnapshot),
-    Record(Box<Record>),
+    /// 正常出关：队列入队保证它排在所有快照之后，天然不会"删了又被写回"
+    ClearSnapshot,
 }
 
 pub struct RecoveredInfo {
@@ -44,36 +49,27 @@ pub struct Runtime {
     pub timer: Mutex<Option<Timer<SystemMonotonic, SystemWall>>>,
     pub store: Store,
     pub io_tx: Sender<IoJob>,
-    pub stop_tick: Arc<AtomicBool>,
-    pub stop_io: Arc<AtomicBool>,
-    pub io_done: Arc<AtomicBool>,
     pub recovered: Mutex<Option<RecoveredInfo>>,
 }
 
 pub fn init(app: &AppHandle) -> Arc<Runtime> {
     let dir = plog::app_dir();
     if let Err(err) = std::fs::create_dir_all(&dir) {
-        log::error!("创建数据目录失败：{err}");
+        ::log::error!("[ipc] 创建数据目录失败：{err}");
     }
     let store = Store::new(&dir);
 
     let (io_tx, io_rx) = mpsc::channel::<IoJob>();
-    let stop_io = Arc::new(AtomicBool::new(false));
-    let io_done = Arc::new(AtomicBool::new(false));
-    let stop_tick = Arc::new(AtomicBool::new(false));
 
     let recovered = recover_previous(&store);
 
-    spawn_io(store.clone(), io_rx, stop_io.clone(), io_done.clone());
+    spawn_io(store.clone(), io_rx);
 
     let runtime = Arc::new(Runtime {
         machine: Mutex::new(SessionMachine::new()),
         timer: Mutex::new(None),
         store,
         io_tx,
-        stop_tick,
-        stop_io,
-        io_done,
         recovered: Mutex::new(recovered),
     });
 
@@ -85,11 +81,21 @@ pub fn init(app: &AppHandle) -> Arc<Runtime> {
 
 /// 启动时发现残留快照 → 说明上次是崩溃/被杀。不续锁，记一条 `interrupted`。
 fn recover_previous(store: &Store) -> Option<RecoveredInfo> {
-    let snapshot = store.load_session()?;
+    let snapshot = match store.load_session() {
+        Some(snapshot) => snapshot,
+        None => {
+            // 文件存在却解析不出来：坏文件必须清掉，否则会永远留着
+            if store.session_path().exists() && store.drop_corrupt_session() {
+                ::log::warn!("[ipc] session.json 已损坏，已删除（不记中断）");
+            }
+            return None;
+        }
+    };
 
     let record = Record {
         id: format!("s_{}", snapshot.started_at_ms),
         started_at_ms: snapshot.started_at_ms,
+        // 崩溃无法得知真实结束时刻，用快照里的已坚持时长推算（粒度 15 s）
         ended_at_ms: snapshot.started_at_ms + snapshot.elapsed_ms,
         planned_ms: snapshot.target_ms,
         // PRD F-9.4：异常中断的时长是真实发生的，照常计入累计（不计有效日）
@@ -101,14 +107,14 @@ fn recover_previous(store: &Store) -> Option<RecoveredInfo> {
     };
 
     if let Err(err) = store.append_jsonl(&store.records_path(), &record) {
-        log::error!("写入 interrupted 记录失败：{err}");
+        ::log::error!("[ipc] 写入 interrupted 记录失败：{err}");
     }
     if let Err(err) = store.clear_session() {
-        log::error!("清理残留快照失败：{err}");
+        ::log::error!("[ipc] 清理残留快照失败：{err}");
     }
 
-    log::warn!(
-        "检测到上次异常中断，已记入记录（{} ms），本次不续锁",
+    ::log::warn!(
+        "[ipc] 检测到上次异常中断，已记入记录（{} ms），本次不续锁",
         snapshot.elapsed_ms
     );
 
@@ -118,35 +124,28 @@ fn recover_previous(store: &Store) -> Option<RecoveredInfo> {
     })
 }
 
-fn spawn_io(store: Store, rx: Receiver<IoJob>, stop: Arc<AtomicBool>, done: Arc<AtomicBool>) {
+/// 常驻写盘线程：唯一写盘者。队列关闭（进程退出）时自然结束。
+fn spawn_io(store: Store, rx: Receiver<IoJob>) {
     thread::spawn(move || {
-        loop {
-            match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(IoJob::Snapshot(snapshot)) => {
+        for job in rx {
+            match job {
+                IoJob::Snapshot(snapshot) => {
                     if let Err(err) = store.save_session(&snapshot) {
-                        log::error!("写快照失败：{err}");
+                        ::log::error!("[io] 写快照失败：{err}");
                     }
                 }
-                Ok(IoJob::Record(record)) => {
-                    if let Err(err) = store.append_jsonl(&store.records_path(), &record) {
-                        log::error!("写记录失败：{err}");
+                IoJob::ClearSnapshot => {
+                    if let Err(err) = store.clear_session() {
+                        ::log::error!("[io] 删除快照失败：{err}");
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-
-        done.store(true, Ordering::SeqCst);
-        log::info!("io 线程已退出");
+        ::log::info!("[io] 队列已关闭，线程退出");
     });
 }
 
-/// 消费电源事件。计时器只在 Locked 期间存在，其余时间忽略。
+/// 消费电源事件。**无论是否在闭关都要落日志**——M1 的验收要求就是"事件可见"。
 fn spawn_power(runtime: Arc<Runtime>) {
     let rx = power::watch();
 
@@ -157,15 +156,21 @@ fn spawn_power(runtime: Arc<Runtime>) {
                 Err(_) => continue,
             };
 
-            if let Some(timer) = guard.as_mut() {
-                match event.kind {
-                    power::PowerEventKind::Suspend => {
+            match event.kind {
+                power::PowerEventKind::Suspend => {
+                    if let Some(timer) = guard.as_mut() {
                         timer.on_suspend();
-                        log::info!("系统挂起，已记录挂起时刻");
+                        ::log::info!("[power] 系统挂起，已记录挂起时刻");
+                    } else {
+                        ::log::info!("[power] 系统挂起（当前未闭关，忽略计时）");
                     }
-                    power::PowerEventKind::Resume => {
+                }
+                power::PowerEventKind::Resume => {
+                    if let Some(timer) = guard.as_mut() {
                         timer.on_resume();
-                        log::info!("系统恢复，累计已坚持 {} ms", timer.elapsed_ms());
+                        ::log::info!("[power] 系统恢复，累计已坚持 {} ms", timer.elapsed_ms());
+                    } else {
+                        ::log::info!("[power] 系统恢复（当前未闭关，忽略计时）");
                     }
                 }
             }
@@ -174,24 +179,18 @@ fn spawn_power(runtime: Arc<Runtime>) {
 }
 
 fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
-    let stop = runtime.stop_tick.clone();
-
     thread::spawn(move || {
         let mut last_snapshot = Instant::now();
 
-        while !stop.load(Ordering::SeqCst) {
+        loop {
             thread::sleep(TICK_INTERVAL);
 
-            // 只在锁定中推进；其余状态没有会话可读
-            let reading = {
-                let timer_guard = match runtime.timer.lock() {
-                    Ok(guard) => guard,
-                    Err(_) => continue,
-                };
-                let Some(timer) = timer_guard.as_ref() else {
-                    continue;
-                };
+            // 先读 timer 并立刻释放 guard，再取 machine：锁顺序固定为 timer → machine
+            let Some((elapsed, skew)) = read_timer(&runtime) else {
+                continue;
+            };
 
+            let session = {
                 let machine = match runtime.machine.lock() {
                     Ok(guard) => guard,
                     Err(_) => continue,
@@ -199,15 +198,13 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
                 if machine.state() != SessionState::Locked {
                     continue;
                 }
-                let Some(session) = machine.session().cloned() else {
-                    continue;
-                };
-
-                (timer.elapsed_ms(), session, timer.skew_min())
+                match machine.session().cloned() {
+                    Some(session) => session,
+                    None => continue,
+                }
             };
 
-            let (elapsed, _session, skew) = reading;
-            let remaining = _session.target_ms.saturating_sub(elapsed);
+            let remaining = session.target_ms.saturating_sub(elapsed);
 
             let _ = app.emit(
                 "timer://tick",
@@ -224,17 +221,13 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
                     Ok(guard) => guard,
                     Err(_) => continue,
                 };
-                machine.transition(
-                    SessionEvent::Tick {
-                        elapsed_ms: elapsed,
-                    },
-                    elapsed,
-                )
+                machine.transition(SessionEvent::Tick, elapsed)
             };
 
             if let Ok(Outcome::Settled { result, session }) = outcome {
                 finish(&app, &runtime, result, &session);
-                break;
+                last_snapshot = Instant::now();
+                continue;
             }
 
             if last_snapshot.elapsed() >= SNAPSHOT_INTERVAL {
@@ -247,21 +240,24 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
     });
 }
 
-/// 出关善后。顺序不可调换（TDD §6.2 + M1 计划 D-9）。
+/// 读当前已坚持时长与时间偏差；没有会话（timer 为 None）时返回 None。
+fn read_timer(runtime: &Arc<Runtime>) -> Option<(u64, i64)> {
+    let guard = runtime.timer.lock().ok()?;
+    let timer = guard.as_ref()?;
+    Some((timer.elapsed_ms(), timer.skew_min()))
+}
+
+/// 出关善后。不再停止 tick/io 线程：它们是进程级的，停掉会让第二次入关直接锁死。
 pub fn finish(
     app: &AppHandle,
     runtime: &Arc<Runtime>,
     result: SessionResult,
     session: &crate::core::session::SessionInfo,
 ) {
-    runtime.stop_tick.store(true, Ordering::SeqCst);
-
-    runtime.stop_io.store(true, Ordering::SeqCst);
-    for _ in 0..20 {
-        if runtime.io_done.load(Ordering::SeqCst) {
-            break;
-        }
-        thread::sleep(Duration::from_millis(50));
+    // 先掐掉"锁定中"标志，让置顶维持线程立刻退出；
+    // 否则它会在 unlock 之后又把主窗口重新置顶
+    if let Some(state) = app.try_state::<crate::app_state::AppState>() {
+        state.set_locked(false);
     }
 
     overlay::unlock_screen(app);
@@ -269,7 +265,8 @@ pub fn finish(
     let record = Record {
         id: session.id.clone(),
         started_at_ms: session.started_at_ms,
-        ended_at_ms: session.started_at_ms + session.elapsed_ms as i64,
+        // 真实结束时刻用墙钟取，不能用 started + elapsed：后者在被改过时间后是错的
+        ended_at_ms: SystemWall.wall_ms(),
         planned_ms: session.target_ms as i64,
         actual_ms: session.elapsed_ms as i64,
         result,
@@ -282,7 +279,7 @@ pub fn finish(
         .store
         .append_jsonl(&runtime.store.records_path(), &record)
     {
-        log::error!("写记录失败（E_STORE_FAILED）：{err}");
+        ::log::error!("[ipc] 写记录失败（E_STORE_FAILED）：{err}");
         let _ = app.emit(
             "notice://toast",
             crate::events::Toast {
@@ -292,16 +289,13 @@ pub fn finish(
         );
     }
 
-    if let Err(err) = runtime.store.clear_session() {
-        log::error!("删除快照失败：{err}");
+    // 入队而不是同步删：队列里排在所有快照之后，慢盘也不会"删了又被写回"
+    if runtime.io_tx.send(IoJob::ClearSnapshot).is_err() {
+        ::log::error!("[ipc] io 队列已关闭，快照未能清理");
     }
 
     if let Ok(mut timer) = runtime.timer.lock() {
         *timer = None;
-    }
-
-    if let Some(state) = app.try_state::<crate::app_state::AppState>() {
-        state.set_locked(false);
     }
 
     let _ = app.emit(
@@ -315,19 +309,22 @@ pub fn finish(
         },
     );
 
-    log::info!("出关：{result:?}，本次 {} ms", session.elapsed_ms);
+    ::log::info!("[ipc] 出关：{result:?}，本次 {} ms", session.elapsed_ms);
 }
 
 pub fn build_snapshot(runtime: &Arc<Runtime>, elapsed: u64) -> SessionSnapshot {
-    let machine = runtime.machine.lock().ok();
-    let session = machine.as_ref().and_then(|m| m.session().cloned());
-
-    let (mono_base, wall_base_ms) = match runtime.timer.lock() {
-        Ok(timer) => match timer.as_ref() {
-            Some(t) => (t.mono_base(), t.wall_base_ms()),
+    // 锁顺序：先 timer，取完即释放
+    let (mono_base, wall_base_ms) = {
+        let guard = runtime.timer.lock().ok();
+        match guard.as_ref().and_then(|g| g.as_ref()) {
+            Some(timer) => (timer.mono_base(), timer.wall_base_ms()),
             None => (0, 0),
-        },
-        Err(_) => (0, 0),
+        }
+    };
+
+    let session = {
+        let machine = runtime.machine.lock().ok();
+        machine.as_ref().and_then(|m| m.session().cloned())
     };
 
     SessionSnapshot {

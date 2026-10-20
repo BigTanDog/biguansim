@@ -227,6 +227,23 @@ impl Store {
         }
         Ok(())
     }
+
+    /// 快照文件存在但解析失败时把它删掉。
+    /// 不删的话，`load_session()` 每次返回 None，坏文件会永远留在数据目录里。
+    /// 返回是否真的删掉了。
+    pub fn drop_corrupt_session(&self) -> bool {
+        let path = self.session_path();
+        if !path.exists() {
+            return false;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => true,
+            Err(err) => {
+                ::log::error!("删除损坏的 session.json 失败：{err}");
+                false
+            }
+        }
+    }
 }
 
 fn tmp_path(path: &Path) -> PathBuf {
@@ -338,6 +355,21 @@ mod tests {
         assert_eq!(skipped, 1);
         assert_eq!(records[2].id, "s_3");
         assert_eq!(records[2].result, SessionResult::Early);
+    }
+
+    /// 回归：坏掉的 session.json 若只返回 None 而不清理，会永远留存在数据目录里
+    #[test]
+    fn corrupt_session_is_dropped() {
+        let dir = TempDir::new("badsession");
+        let store = Store::new(&dir.path);
+
+        assert!(!store.drop_corrupt_session(), "文件不存在时不应报删成功");
+        assert!(store.load_session().is_none());
+
+        fs::write(store.session_path(), b"{ \"state\": ").unwrap();
+        assert!(store.load_session().is_none(), "损坏文件解析应失败");
+        assert!(store.drop_corrupt_session(), "损坏文件应被删除");
+        assert!(!store.session_path().exists());
     }
 
     #[test]
