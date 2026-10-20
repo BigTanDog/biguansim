@@ -109,7 +109,10 @@
 | `core::store` | 配置/流水/快照的读写与迁移 | `atomic_write(path, bytes)`、`append_jsonl()` |
 | `io_queue` | 落盘队列的唯一消费者（进程级常驻） | `run(store, rx)`、`IoJob::{Snapshot, ClearSnapshot}` |
 | `platform::keyfilter` | 按键判定**纯函数**（不含任何系统调用，可单测） | `decide(vk, is_down, &mut ModState) -> Swallow/Pass` |
-| `platform::hook` | 键盘钩子安装/卸载、拦截表、60 s 周期重装、Esc 长按时间戳 | `install() -> Result<Guard>`、`esc_hold_ms() -> u64` |
+| `platform::hook` | 键盘钩子安装/卸载、60 s 周期重装（**先装新的再卸旧的**）、每秒 `GetAsyncKeyState` 键态校正、Esc 长按时间戳 | `install(&AppHandle) -> Result<()>`、`esc_hold_ms() -> u64` |
+| `platform::focus` | 抢焦点：前台事件立即抢 + 500 ms 兜底重试 + `AttachThreadInput` 强制；**回调内不做 IO** | `start(hwnd) / stop()` |
+| `platform::sleep` | 阻止系统睡眠（同线程 `SetThreadExecutionState`，只加 `ES_SYSTEM_REQUIRED`） | `block() / allow()` |
+| `platform::display` | 显示变化检测（1 s 轮询，连续 2 次不一致才判 `accident`） | `spawn(app, runtime)` |
 | `platform::overlay` | 多屏窗口创建、置顶、销毁 | `show_all() -> Vec<WindowId>`、`hide_all()` |
 | `platform::focus` | 前台窗口监听与抢回 | `arm(targets) / disarm()` |
 | `platform::power` | 阻止睡眠、订阅挂起/恢复 | `block_sleep() -> Guard`、`watch(cb)` |
@@ -346,6 +349,7 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 | 码 | 含义 | UI 表现 |
 |---|---|---|
 | `E_HOOK_FAILED` | 钩子安装失败 | 「结界未能生效，已取消入关」+ 排查建议 |
+| `E_FOCUS_FAILED` | 抢焦点钩子安装失败（M3 起只记日志、不拒绝入关，因为拦键仍在） | 界面提示「未能接管前台」 |
 | `E_OVERLAY_FAILED` | 主屏窗口创建失败 | 同上 |
 | `E_BANK_INVALID` | 题库解析失败且无内嵌回退 | 禁止入关 |
 | `E_STATE_ILLEGAL` | 非法状态调用（含长按不足 8 s 就请求紧急通道） | 前端静默刷新 `get_state` |
@@ -552,7 +556,7 @@ biguansim/
 |---|---|---|
 | M1 | `platform::overlay` + `core::timer` + `core::store` + `platform::power::watch`（只订阅挂起/恢复，不阻止睡眠）+ **拦键 spike（原在 M3，2026-10-19 前移）** | 能全屏锁住、多屏覆盖、计时准、杀进程不续锁、挂起/恢复事件进日志；spike 五项有明确结论 |
 | M2 | `core::session` + `events` + `Lock.vue` + 钟鸣 | 到点自动解锁全流程 |
-| M3 | `platform::hook`（复用 M1 的 `keyfilter`）、`focus/power/brightness/display` | 快捷键失效（含单击 Win 不弹开始菜单）、熄屏唤醒正常、拔屏出关 |
+| M3 | `platform::hook`（复用 M1 的 `keyfilter`）、`focus/sleep/display`（**`brightness` 延后**，见 PRD A-14 注） | 快捷键失效（含单击 Win 不弹开始菜单）、抢回前台 ≤50 ms、`powercfg /requests` 见请求、拔屏 2 s 内出关 |
 | M4 | `core::cost/bank` + `Challenge` 投影 + 抄写 | 冷却与成本递增全链路 |
 | M5 | `core::stats/quote` + 记录/题库/设置/引导页 | 60 题 + 语料 180 条 + 抄写段 10 段 + 7 个页面 |
 
