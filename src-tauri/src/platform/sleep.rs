@@ -16,46 +16,44 @@ use windows_sys::Win32::System::Power::{
 
 static STOP: Mutex<Option<Sender<()>>> = Mutex::new(None);
 
-/// 开始阻止睡眠；重复调用是幂等的。
+/// 开始阻止睡眠；重复调用是幂等的。**不等待子线程**，避免拖住调用方（tick 线程）。
 pub fn block() {
-    let mut guard = match STOP.lock() {
-        Ok(guard) => guard,
-        Err(_) => return,
-    };
-
-    if guard.is_some() {
-        return;
+    {
+        let guard = match STOP.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        if guard.is_some() {
+            return;
+        }
     }
 
     let (tx, rx) = mpsc::channel::<()>();
-    let (ready_tx, ready_rx) = mpsc::channel::<bool>();
+
+    // 先登记再起线程：万一线程启动慢，`allow()` 也不会漏掉这次请求
+    match STOP.lock() {
+        Ok(mut guard) => *guard = Some(tx),
+        Err(_) => return,
+    }
 
     thread::spawn(move || {
         // SAFETY: 在本线程设置，也在本线程清除
         let previous = unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
-        let ok = previous != 0;
-        let _ = ready_tx.send(ok);
 
-        if !ok {
-            ::log::error!("[sleep] SetThreadExecutionState 失败");
+        if previous == 0 {
+            ::log::error!("[sleep] SetThreadExecutionState 失败，本次未能阻止睡眠");
             return;
         }
 
-        // 一直挂到收到停止信号
+        ::log::info!("[sleep] 已阻止系统睡眠");
+
+        // 一直挂到收到停止信号；12 小时兜底，防止极端情况下线程永驻
         let _ = rx.recv_timeout(Duration::from_secs(60 * 60 * 12));
 
         // SAFETY: 同一线程清除
         unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
         ::log::info!("[sleep] 已解除睡眠阻止");
     });
-
-    match ready_rx.recv_timeout(Duration::from_secs(2)) {
-        Ok(true) => {
-            *guard = Some(tx);
-            ::log::info!("[sleep] 已阻止系统睡眠");
-        }
-        _ => ::log::error!("[sleep] 睡眠阻止未能生效"),
-    }
 }
 
 /// 解除阻止；重复调用是幂等的。

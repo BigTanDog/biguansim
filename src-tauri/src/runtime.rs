@@ -86,6 +86,10 @@ pub fn force_settle(app: &AppHandle, runtime: &Arc<Runtime>, result: SessionResu
             Ok(guard) => guard,
             Err(_) => return,
         };
+        // PRD §5.2：显示变化出关要记一次 fault
+        if matches!(result, SessionResult::Accident) {
+            machine.note_fault();
+        }
         machine.transition(SessionEvent::Finish { result }, elapsed)
     };
 

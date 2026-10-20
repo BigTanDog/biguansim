@@ -189,6 +189,13 @@ impl SessionMachine {
         }
     }
 
+    /// 记一次故障（显示变化等），用于 `records.jsonl` 的 `faults` 字段（PRD §5.2）。
+    pub fn note_fault(&mut self) {
+        if let Some(session) = self.session.as_mut() {
+            session.faults = session.faults.saturating_add(1);
+        }
+    }
+
     /// 入关失败/取消时回滚：回到"没有任何会话"的 Idle，避免半开半关。
     pub fn reset(&mut self) {
         self.state = SessionState::Idle;

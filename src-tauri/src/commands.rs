@@ -115,7 +115,7 @@ pub fn start_session(
     };
 
     // 先装钩子：装不上就绝不进闭关（PRD D-7，绝不允许"看起来锁了其实没锁"）
-    if let Err(err) = hook::install() {
+    if let Err(err) = hook::install(&app) {
         if let Ok(mut machine) = runtime.machine.lock() {
             machine.reset();
         }

@@ -84,6 +84,14 @@ export const onTick = (handler: (tick: TimerTick) => void): Promise<UnlistenFn> 
 export const onStateChanged = (handler: (state: StateChanged) => void): Promise<UnlistenFn> =>
   listen<StateChanged>('state://changed', (event) => handler(event.payload))
 
+export interface Toast {
+  level: string
+  text: string
+}
+
+export const onToast = (handler: (toast: Toast) => void): Promise<UnlistenFn> =>
+  listen<Toast>('notice://toast', (event) => handler(event.payload))
+
 export const onArmingTick = (handler: (tick: ArmingTick) => void): Promise<UnlistenFn> =>
   listen<ArmingTick>('arming://tick', (event) => handler(event.payload))
 

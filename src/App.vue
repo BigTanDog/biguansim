@@ -23,15 +23,35 @@ function onDevKeydown(event: KeyboardEvent): void {
   }
 }
 
+/** 闭关期间屏蔽刷新类快捷键与右键菜单（TDD §5.4） */
+function onBlockedKeydown(event: KeyboardEvent): void {
+  if (store.phase !== 'lock' && store.phase !== 'arming') {
+    return
+  }
+
+  const refresh = event.key === 'F5' || (event.ctrlKey && event.key.toLowerCase() === 'r')
+  if (refresh) {
+    event.preventDefault()
+  }
+}
+
+function onContextMenu(event: MouseEvent): void {
+  if (store.phase === 'lock' || store.phase === 'arming') {
+    event.preventDefault()
+  }
+}
+
 onMounted(() => {
   void store.init()
-  if (DEV) {
-    window.addEventListener('keydown', onDevKeydown)
-  }
+  window.addEventListener('keydown', onDevKeydown)
+  window.addEventListener('keydown', onBlockedKeydown)
+  window.addEventListener('contextmenu', onContextMenu)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onDevKeydown)
+  window.removeEventListener('keydown', onBlockedKeydown)
+  window.removeEventListener('contextmenu', onContextMenu)
 })
 </script>
 
@@ -40,4 +60,46 @@ onUnmounted(() => {
   <Arming v-else-if="store.phase === 'arming'" />
   <Lock v-else-if="store.phase === 'lock'" />
   <Settled v-else />
+
+  <Transition name="toast">
+    <div v-if="store.toast" class="toast" :class="`toast--${store.toast.level}`">
+      {{ store.toast.text }}
+    </div>
+  </Transition>
 </template>
+
+<style scoped>
+.toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  padding: 8px 16px;
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--radius-btn);
+  background: var(--dialog-bg);
+  color: var(--fg);
+  font-size: 12px;
+  transform: translateX(-50%);
+  z-index: 10;
+}
+
+.toast--error {
+  border-color: #d4695f;
+  color: #d4695f;
+}
+
+.toast--warn {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 200ms ease;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+}
+</style>

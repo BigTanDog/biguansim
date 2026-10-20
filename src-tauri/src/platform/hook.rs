@@ -1,45 +1,55 @@
 //! 低级键盘钩子（M3）。
 //!
-//! 三条硬约束（AGENTS §6 / TDD §4.4）：
-//! 1. 回调里只做"取 vk + 判定 + 返回"，不分配、不加锁、不写文件、不打印；
-//! 2. 判定逻辑全部在 `keyfilter::decide`（纯函数，19 条单测），这里只做搬运；
-//! 3. 60 s 周期重装，因为钩子被系统静默摘除时线程本身是活的，探针式检测发现不了。
+//! 四条硬约束：
+//! 1. 回调里只做"取 vk + 判定 + 返回"，不分配、不加锁、不写文件、不打印（AGENTS §6）；
+//! 2. 判定逻辑全部在 `keyfilter::decide`（纯函数），这里只做搬运；
+//! 3. 60 s 周期重装，因为钩子被系统静默摘除时线程本身是活的，探针式检测发现不了；
+//! 4. 每秒用 `GetAsyncKeyState` 校正修饰键状态——锁屏/安全桌面期间抬起事件不会回传，
+//!    不校正的话解锁后键盘会被当成"Win 一直按住"而全部吞掉。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
+use tauri::{AppHandle, Emitter};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Shutdown::LockWorkStation;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::System::WindowsProgramming::QueryUnbiasedInterruptTime;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
     KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN,
     WM_SYSKEYUP,
 };
 
-use super::keyfilter::{decide, ModState, Verdict, VK_ESCAPE};
+use super::keyfilter::{
+    decide, reconcile, wants_lock, ModState, Verdict, VK_ESCAPE, VK_LWIN, VK_RWIN,
+};
 
 /// 自定义消息：让钩子线程在"最近 100 ms 没有按键"时重装钩子
 const WM_REINSTALL: u32 = WM_APP + 1;
-/// 重装周期
-const REINSTALL_INTERVAL: Duration = Duration::from_secs(60);
-/// 重装前要求的最小静默时间
+const REINSTALL_INTERVAL_SECS: u64 = 60;
 const IDLE_BEFORE_REINSTALL_MS: u32 = 100;
+/// 键态校正周期
+const RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 
 const BIT_LWIN: u8 = 1 << 0;
 const BIT_RWIN: u8 = 1 << 1;
 const BIT_ALT: u8 = 1 << 2;
 const BIT_CTRL: u8 = 1 << 3;
 const BIT_SHIFT: u8 = 1 << 4;
-const BIT_WIN_USED: u8 = 1 << 5;
 
 static MODS: AtomicU8 = AtomicU8::new(0);
 static HOOK_TID: AtomicU32 = AtomicU32::new(0);
 static ESC_DOWN_MS: AtomicU64 = AtomicU64::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(false);
+static SUPERVISOR_STARTED: AtomicBool = AtomicBool::new(false);
+static APP: OnceLock<AppHandle> = OnceLock::new();
 
 fn mono_ms() -> u64 {
     let mut ticks: u64 = 0;
@@ -55,7 +65,6 @@ fn decode(bits: u8) -> ModState {
         alt: bits & BIT_ALT != 0,
         ctrl: bits & BIT_CTRL != 0,
         shift: bits & BIT_SHIFT != 0,
-        win_used_other: bits & BIT_WIN_USED != 0,
     }
 }
 
@@ -66,7 +75,6 @@ fn encode(state: &ModState) -> u8 {
     bits |= (state.alt as u8) * BIT_ALT;
     bits |= (state.ctrl as u8) * BIT_CTRL;
     bits |= (state.shift as u8) * BIT_SHIFT;
-    bits |= (state.win_used_other as u8) * BIT_WIN_USED;
     bits
 }
 
@@ -86,7 +94,9 @@ pub fn esc_hold_ms() -> u64 {
 }
 
 /// 装钩子。失败必须让调用方拒绝入关（PRD D-7）。
-pub fn install() -> Result<(), String> {
+pub fn install(app: &AppHandle) -> Result<(), String> {
+    let _ = APP.set(app.clone());
+
     if RUNNING.load(Ordering::SeqCst) {
         return Ok(());
     }
@@ -104,7 +114,11 @@ pub fn install() -> Result<(), String> {
             Ok(hook) => {
                 RUNNING.store(true, Ordering::SeqCst);
                 let _ = tx.send(Ok(()));
-                let _ = io_loop(hook);
+                if let Err(err) = io_loop(hook) {
+                    ::log::error!("[hook] 消息循环异常：{err}");
+                    RUNNING.store(false, Ordering::SeqCst);
+                    toast("键盘拦截异常，请重新入关");
+                }
             }
             Err(err) => {
                 let _ = tx.send(Err(err));
@@ -114,7 +128,7 @@ pub fn install() -> Result<(), String> {
 
     match rx.recv_timeout(Duration::from_secs(3)) {
         Ok(Ok(())) => {
-            spawn_reinstaller();
+            spawn_supervisor();
             ::log::info!("[hook] 键盘钩子已安装");
             Ok(())
         }
@@ -159,28 +173,25 @@ fn io_loop(mut hook: isize) -> Result<(), String> {
         let ret = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
 
         if ret == -1 {
-            ::log::error!("[hook] 消息循环异常退出");
-            return Err("E_HOOK_FAILED: 消息循环异常".to_string());
+            return Err("消息循环异常".to_string());
         }
         if ret == 0 || !RUNNING.load(Ordering::SeqCst) {
             break;
         }
 
         if msg.message == WM_REINSTALL {
-            // 重装：先卸载再装，失败重试 3 次
-            for attempt in 1..=3 {
-                // SAFETY: 卸载自己装的钩子
-                unsafe { UnhookWindowsHookEx(hook as *mut _) };
-                match set_hook() {
-                    Ok(new_hook) => {
-                        hook = new_hook;
-                        ::log::info!("[hook] 已重装（第 {attempt} 次尝试）");
-                        break;
-                    }
-                    Err(err) => {
-                        ::log::warn!("[hook] 重装失败（{attempt}/3）：{err}");
-                        thread::sleep(Duration::from_millis(200));
-                    }
+            // **先装新的、成功后再卸旧的**：两个低级钩子可以共存，
+            // 先卸后装的话，一旦新钩子装不上，结界会在整个 60 s 周期里裸奔。
+            match set_hook() {
+                Ok(new_hook) => {
+                    // SAFETY: 卸载旧的
+                    unsafe { UnhookWindowsHookEx(hook as *mut _) };
+                    hook = new_hook;
+                    ::log::info!("[hook] 已重装");
+                }
+                Err(err) => {
+                    ::log::warn!("[hook] 重装失败，继续使用旧钩子：{err}");
+                    toast("键盘拦截重装失败，已保留旧钩子");
                 }
             }
         }
@@ -191,35 +202,81 @@ fn io_loop(mut hook: isize) -> Result<(), String> {
     Ok(())
 }
 
-/// 每 60 s 提醒钩子线程重装一次；挑"最近没有按键"的时刻，避免吞掉真实按键。
-fn spawn_reinstaller() {
-    thread::spawn(|| loop {
-        thread::sleep(REINSTALL_INTERVAL);
-        if !RUNNING.load(Ordering::SeqCst) {
-            return;
-        }
+/// 常驻监督线程（**全进程只有一个**）：每秒用真实键态校正状态机，每 60 s 触发重装。
+/// 之前是每次 install 都起一个，用户连开几关就会累积 N 个线程同时投递重装消息。
+fn spawn_supervisor() {
+    if SUPERVISOR_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
 
-        let mut info = LASTINPUTINFO {
-            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
-            dwTime: 0,
-        };
-        // SAFETY: 只写入栈上结构体
-        unsafe { GetLastInputInfo(&mut info) };
+    thread::spawn(|| {
+        let mut seconds_since_reinstall: u64 = 0;
 
-        // GetTickCount 与 dwTime 同为开机毫秒
-        let idle_ms = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount() }
-            .wrapping_sub(info.dwTime);
+        loop {
+            thread::sleep(RECONCILE_INTERVAL);
 
-        if idle_ms < IDLE_BEFORE_REINSTALL_MS {
-            continue;
-        }
+            if !RUNNING.load(Ordering::SeqCst) {
+                seconds_since_reinstall = 0;
+                continue;
+            }
 
-        let tid = HOOK_TID.load(Ordering::SeqCst);
-        if tid != 0 {
-            // SAFETY: 向本进程的钩子线程投递自定义消息
-            unsafe { PostThreadMessageW(tid, WM_REINSTALL, 0, 0) };
+            // 1. 键态校正：锁屏/安全桌面期间的抬起事件收不到，只能靠真实键态纠正
+            let pressed = |vk: i32| -> bool {
+                // SAFETY: 只查询键态，无副作用
+                (unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000) != 0
+            };
+            let mut state = decode(MODS.load(Ordering::Relaxed));
+            reconcile(
+                &mut state,
+                pressed(VK_LWIN as i32),
+                pressed(VK_RWIN as i32),
+                pressed(super::keyfilter::VK_MENU as i32),
+                pressed(super::keyfilter::VK_CONTROL as i32),
+                pressed(super::keyfilter::VK_SHIFT as i32),
+            );
+            MODS.store(encode(&state), Ordering::Relaxed);
+
+            // 2. 60 s 重装：挑最近没有按键的时刻
+            seconds_since_reinstall += 1;
+            if seconds_since_reinstall < REINSTALL_INTERVAL_SECS {
+                continue;
+            }
+
+            let mut info = LASTINPUTINFO {
+                cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+                dwTime: 0,
+            };
+            // SAFETY: 只写入栈上结构体
+            unsafe { GetLastInputInfo(&mut info) };
+
+            // SAFETY: 只读系统开机毫秒
+            let idle_ms = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount() }
+                .wrapping_sub(info.dwTime);
+
+            if idle_ms < IDLE_BEFORE_REINSTALL_MS {
+                continue;
+            }
+
+            seconds_since_reinstall = 0;
+            let tid = HOOK_TID.load(Ordering::SeqCst);
+            if tid != 0 {
+                // SAFETY: 向本进程的钩子线程投递自定义消息
+                unsafe { PostThreadMessageW(tid, WM_REINSTALL, 0, 0) };
+            }
         }
     });
+}
+
+fn toast(text: &str) {
+    if let Some(app) = APP.get() {
+        let _ = app.emit(
+            "notice://toast",
+            crate::events::Toast {
+                level: "warn",
+                text: text.to_string(),
+            },
+        );
+    }
 }
 
 unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -249,8 +306,15 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     }
 
     let mut state = decode(MODS.load(Ordering::Relaxed));
+    let win_down = state.any_win();
     let verdict = decide(vk, is_down, &mut state);
     MODS.store(encode(&state), Ordering::Relaxed);
+
+    // Win+L 被整体吞掉了，锁屏得我们自己来（F-3.4）
+    if wants_lock(vk, is_down, win_down) {
+        // SAFETY: 锁定当前工作站，无副作用
+        unsafe { LockWorkStation() };
+    }
 
     match verdict {
         Verdict::Swallow => 1,

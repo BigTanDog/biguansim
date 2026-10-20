@@ -24,6 +24,8 @@ export const useSessionStore = defineStore('session', () => {
   const result = ref<string | null>(null)
   const lastSession = ref<ipc.LastSession | null>(null)
   const lastError = ref<string | null>(null)
+  const toast = ref<ipc.Toast | null>(null)
+  let toastTimer: number | undefined
 
   const lastDurationMin = computed(() => config.value?.lastDurationMin ?? 120)
 
@@ -70,6 +72,14 @@ export const useSessionStore = defineStore('session', () => {
 
       await ipc.onArmingTick((tick) => {
         armingRemainingMs.value = tick.remainingMs
+      })
+
+      await ipc.onToast((incoming) => {
+        toast.value = incoming
+        window.clearTimeout(toastTimer)
+        toastTimer = window.setTimeout(() => {
+          toast.value = null
+        }, 4_000)
       })
 
       await ipc.onChime((chime) => {
@@ -170,6 +180,7 @@ export const useSessionStore = defineStore('session', () => {
     result,
     lastSession,
     lastDurationMin,
+    toast,
     progress,
     init,
     start,

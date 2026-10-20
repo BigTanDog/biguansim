@@ -32,8 +32,6 @@ const BIT_RWIN: u8 = 1 << 1;
 const BIT_ALT: u8 = 1 << 2;
 const BIT_CTRL: u8 = 1 << 3;
 const BIT_SHIFT: u8 = 1 << 4;
-/// Win 按住期间是否按过别的键（决定单击 Win 的抬起要不要吞）
-const BIT_WIN_USED: u8 = 1 << 5;
 
 static MODS: AtomicU8 = AtomicU8::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(true);
@@ -91,7 +89,6 @@ fn decode(bits: u8) -> ModState {
         alt: bits & BIT_ALT != 0,
         ctrl: bits & BIT_CTRL != 0,
         shift: bits & BIT_SHIFT != 0,
-        win_used_other: bits & BIT_WIN_USED != 0,
     }
 }
 
@@ -111,9 +108,6 @@ fn encode(state: &ModState) -> u8 {
     }
     if state.shift {
         bits |= BIT_SHIFT;
-    }
-    if state.win_used_other {
-        bits |= BIT_WIN_USED;
     }
     bits
 }
