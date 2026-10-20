@@ -1,0 +1,80 @@
+/* 设计令牌唯一来源：PRD §9.1。界面代码只引用变量，不写死色值。 */
+:root {
+  color-scheme: dark;
+
+  --bg: #14110e;
+  --fg: #ede6d8;
+  --fg-muted: #8c8375;
+  --accent: #c9a227;
+  --dialog-bg: #1c1813;
+  --dialog-border: rgba(201, 162, 39, 0.22);
+
+  --radius-card: 12px;
+  --radius-btn: 6px;
+
+  --font-ui: 'Microsoft YaHei', 'Source Han Sans SC', system-ui, sans-serif;
+  --font-num: Consolas, ui-monospace, monospace;
+}
+
+/* 暖白：PRD §9.1 */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f7f3ea;
+  --fg: #2c2620;
+  --fg-muted: #6b6156;
+  --dialog-bg: #fffdf8;
+  --dialog-border: rgba(201, 162, 39, 0.35);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  /* TDD §5.4：禁止选中与拖拽，避免全屏锁定时误拖出元素 */
+  user-select: none;
+  -webkit-user-drag: none;
+  overflow: hidden;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.btn {
+  padding: 8px 18px;
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--radius-btn);
+  background: transparent;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+}
+
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,4 @@
+# pnpm 11 把构建脚本白名单放在这里（package.json 里的同名字段已不再读取）。
+# esbuild 的 postinstall 用于落地平台二进制，被默认拦截后 Vite 起不来。
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,10 @@
+# 人工排版的文档：Prettier 会重排表格与长行，制造无意义的大 diff
+AGENTS.md
+docs/
+
+# 产物与锁文件（由工具生成，不参与格式检查）
+dist/
+node_modules/
+src-tauri/target/
+pnpm-lock.yaml
+Cargo.lock
