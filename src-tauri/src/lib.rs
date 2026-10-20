@@ -36,6 +36,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::start_session,
+            commands::cancel_arming,
             commands::get_state
         ])
         .setup(|app| {

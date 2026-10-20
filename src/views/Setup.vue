@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import { useSessionStore } from '../stores/session'
 
@@ -11,6 +11,17 @@ const GOAL_MAX_LEN = 24
 const store = useSessionStore()
 const duration = ref(120)
 const goal = ref('')
+
+// 「再入一关」预填上次时长（PRD F-7.6）：配置到达或被更新时同步
+watch(
+  () => store.lastDurationMin,
+  (value) => {
+    if (value >= MIN_MINUTES && value <= MAX_MINUTES) {
+      duration.value = value
+    }
+  },
+  { immediate: true },
+)
 
 const validDuration = computed(() => duration.value >= MIN_MINUTES && duration.value <= MAX_MINUTES)
 

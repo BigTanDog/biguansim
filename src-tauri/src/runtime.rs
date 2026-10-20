@@ -20,10 +20,10 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::core::session::{Outcome, SessionEvent, SessionMachine, SessionState};
+use crate::core::session::{Outcome, SessionEvent, SessionMachine, SessionState, ARMING_MS};
 use crate::core::store::{Record, SessionResult, SessionSnapshot, Store};
-use crate::core::timer::{Timer, WallClock};
-use crate::events::{StateChanged, TimerTick};
+use crate::core::timer::{MonotonicClock, Timer, WallClock};
+use crate::events::{ArmingTick, Chime, StateChanged, TimerTick};
 use crate::platform::log as plog;
 use crate::platform::time::{SystemMonotonic, SystemWall};
 use crate::platform::{overlay, power};
@@ -32,6 +32,8 @@ use crate::platform::{overlay, power};
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(15);
 /// tick 节拍
 const TICK_INTERVAL: Duration = Duration::from_millis(250);
+/// 末 10 秒三声轻滴答的触发点（PRD F-7.2）
+const CHIME_THRESHOLDS: [u64; 3] = [10_000, 7_000, 4_000];
 
 pub enum IoJob {
     Snapshot(SessionSnapshot),
@@ -181,9 +183,28 @@ fn spawn_power(runtime: Arc<Runtime>) {
 fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
     thread::spawn(move || {
         let mut last_snapshot = Instant::now();
+        let mut last_remaining = u64::MAX;
 
         loop {
             thread::sleep(TICK_INTERVAL);
+
+            let state = match runtime.machine.lock() {
+                Ok(machine) => machine.state(),
+                Err(_) => continue,
+            };
+
+            match state {
+                SessionState::Arming => {
+                    step_arming(&app, &runtime);
+                    last_remaining = u64::MAX;
+                    continue;
+                }
+                SessionState::Locked => {}
+                _ => {
+                    last_remaining = u64::MAX;
+                    continue;
+                }
+            }
 
             // 先读 timer 并立刻释放 guard，再取 machine：锁顺序固定为 timer → machine
             let Some((elapsed, skew)) = read_timer(&runtime) else {
@@ -195,9 +216,6 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
                     Ok(guard) => guard,
                     Err(_) => continue,
                 };
-                if machine.state() != SessionState::Locked {
-                    continue;
-                }
                 match machine.session().cloned() {
                     Some(session) => session,
                     None => continue,
@@ -215,6 +233,22 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
                 },
             );
 
+            // 末 10 秒三声轻滴答（PRD F-7.2）：只在跨过阈值的那一次触发
+            if last_remaining != u64::MAX {
+                for (index, threshold) in CHIME_THRESHOLDS.iter().enumerate() {
+                    if last_remaining > *threshold && remaining <= *threshold {
+                        let _ = app.emit(
+                            "chime://play",
+                            Chime {
+                                kind: "tick",
+                                index: index as u32,
+                            },
+                        );
+                    }
+                }
+            }
+            last_remaining = remaining;
+
             // 到点结算的唯一实现处（core::session::transition 内部先判剩余）
             let outcome = {
                 let mut machine = match runtime.machine.lock() {
@@ -227,6 +261,7 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
             if let Ok(Outcome::Settled { result, session }) = outcome {
                 finish(&app, &runtime, result, &session);
                 last_snapshot = Instant::now();
+                last_remaining = u64::MAX;
                 continue;
             }
 
@@ -238,6 +273,79 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
             }
         }
     });
+}
+
+/// 起势：每 250 ms 推一次剩余毫秒；走满 3 秒后进 Locked 并启动计时器。
+fn step_arming(app: &AppHandle, runtime: &Arc<Runtime>) {
+    let mono_now = SystemMonotonic.unbiased_ms();
+
+    let Some((armed_at, target_ms)) = ({
+        let machine = match runtime.machine.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        machine
+            .session()
+            .map(|session| (session.armed_at_mono_ms, session.target_ms))
+    }) else {
+        return;
+    };
+
+    let elapsed_arm = mono_now.saturating_sub(armed_at);
+    let remaining = ARMING_MS.saturating_sub(elapsed_arm);
+
+    let _ = app.emit(
+        "arming://tick",
+        ArmingTick {
+            remaining_ms: remaining as i64,
+        },
+    );
+
+    if remaining > 0 {
+        return;
+    }
+
+    // 起势结束：状态机出口 + 启动计时器 + 首写快照
+    let outcome = {
+        let mut machine = match runtime.machine.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        machine.transition(SessionEvent::ArmFinished, 0)
+    };
+
+    if !matches!(outcome, Ok(Outcome::Locked)) {
+        ::log::warn!("[tick] 起势结束时状态已不是 Arming，忽略");
+        return;
+    }
+
+    if let Ok(mut guard) = runtime.timer.lock() {
+        *guard = Some(Timer::start(SystemMonotonic, SystemWall));
+    }
+
+    let snapshot = build_snapshot(runtime, 0);
+    let _ = runtime.io_tx.send(IoJob::Snapshot(snapshot));
+
+    let goal = {
+        let machine = match runtime.machine.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        machine.session().and_then(|session| session.goal.clone())
+    };
+
+    let _ = app.emit(
+        "state://changed",
+        StateChanged {
+            state: SessionState::Locked.as_str().to_string(),
+            result: None,
+            goal,
+            elapsed_ms: 0,
+            target_ms: target_ms as i64,
+        },
+    );
+
+    ::log::info!("[tick] 起势结束，进入闭关");
 }
 
 /// 读当前已坚持时长与时间偏差；没有会话（timer 为 None）时返回 None。
@@ -297,6 +405,15 @@ pub fn finish(
     if let Ok(mut timer) = runtime.timer.lock() {
         *timer = None;
     }
+
+    // 到点钟鸣（PRD F-7.2）：一次事件，前端连响 3 声
+    let _ = app.emit(
+        "chime://play",
+        Chime {
+            kind: "bell",
+            index: 0,
+        },
+    );
 
     let _ = app.emit(
         "state://changed",

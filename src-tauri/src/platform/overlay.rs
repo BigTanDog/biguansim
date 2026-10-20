@@ -63,6 +63,8 @@ pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
     main.set_decorations(false).map_err(|e| e.to_string())?;
     main.set_always_on_top(true).map_err(|e| e.to_string())?;
     main.show().map_err(|e| e.to_string())?;
+    // 起势窗口必须拿到焦点，否则 3 秒内的 Esc 取消收不到按键（F-2.2）
+    let _ = main.set_focus();
 
     for (index, rect) in rects.iter().enumerate().skip(1) {
         let label = format!("{SECONDARY_PREFIX}{index}");

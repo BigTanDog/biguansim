@@ -22,6 +22,21 @@ pub struct TimerTick {
     pub clock_skew_min: i64,
 }
 
+/// 起势倒计时（PRD F-2.1）。时间由 Rust 的 tick 线程给出，前端只渲染。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArmingTick {
+    pub remaining_ms: i64,
+}
+
+/// 钟鸣（PRD F-7.2）。`kind = "tick"` 是末 10 秒的轻滴答，`"bell"` 是到点的钟鸣。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Chime {
+    pub kind: &'static str,
+    pub index: u32,
+}
+
 #[derive(Clone, Serialize)]
 pub struct Toast {
     pub level: &'static str,

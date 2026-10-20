@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::app_state::AppState;
 use crate::core::session::{Outcome, SessionEvent, SessionState};
 use crate::core::store::Config;
-use crate::core::timer::{Timer, WallClock};
+use crate::core::timer::{MonotonicClock, WallClock};
 use crate::events::StateChanged;
 use crate::platform::overlay;
 use crate::platform::time::{SystemMonotonic, SystemWall};
@@ -84,8 +84,10 @@ pub fn start_session(
 
     let duration_ms = duration_min as u64 * 60_000;
     let now_ms = SystemWall.wall_ms();
+    let now_mono_ms = SystemMonotonic.unbiased_ms();
     let bank = bank_id.unwrap_or_else(|| "basic".to_string());
 
+    // Idle/Settled → Arming。真正进入 Locked 由 tick 线程在 3 秒后完成（PRD F-2.1）
     let (session_id, target_ms) = {
         let mut machine = runtime
             .machine
@@ -96,12 +98,13 @@ pub fn start_session(
             SessionEvent::Start {
                 duration_ms,
                 now_ms,
+                now_mono_ms,
                 goal: goal.clone(),
                 bank,
             },
             0,
         ) {
-            Ok(Outcome::Locked) => {
+            Ok(Outcome::Arming) => {
                 let session = machine
                     .session()
                     .ok_or_else(|| "E_STATE_ILLEGAL".to_string())?;
@@ -122,28 +125,12 @@ pub fn start_session(
         return Err(format!("E_OVERLAY_FAILED: {err}"));
     }
 
-    let timer = Timer::start(SystemMonotonic, SystemWall);
-    if let Ok(mut guard) = runtime.timer.lock() {
-        *guard = Some(timer);
-    }
-
     state.set_locked(true);
-
-    // 首写快照（PRD §5.2：进入 Locked 时写）。
-    // 走 io 队列而不是直接写盘：io 线程是唯一写盘者，直接写会和它抢同一个 .tmp
-    let snapshot = crate::runtime::build_snapshot(&runtime, 0);
-    if runtime
-        .io_tx
-        .send(crate::runtime::IoJob::Snapshot(snapshot))
-        .is_err()
-    {
-        log::error!("[ipc] io 队列不可用，首写快照失败");
-    }
 
     let _ = app.emit(
         "state://changed",
         StateChanged {
-            state: SessionState::Locked.as_str().to_string(),
+            state: SessionState::Arming.as_str().to_string(),
             result: None,
             goal,
             elapsed_ms: 0,
@@ -151,11 +138,57 @@ pub fn start_session(
         },
     );
 
-    log::info!("入关：{duration_min} 分钟，会话 {session_id}");
+    // 「再入一关」要预填上次时长（F-7.6）：把这次的时长写回 config
+    let mut config = runtime.store.load_config();
+    if config.last_duration_min != duration_min {
+        config.last_duration_min = duration_min;
+        if let Err(err) = runtime.store.save_config(&config) {
+            log::error!("[ipc] 保存 lastDurationMin 失败：{err}");
+        }
+    }
+
+    log::info!("[ipc] 入关（起势）：{duration_min} 分钟，会话 {session_id}");
     Ok(StartResult {
         ok: true,
         session_id,
     })
+}
+
+/// 起势 3 秒内取消（PRD F-2.2）。非 Arming 状态一律 `E_STATE_ILLEGAL`。
+#[tauri::command]
+pub fn cancel_arming(
+    app: AppHandle,
+    runtime: State<'_, Arc<Runtime>>,
+    app_state: State<'_, AppState>,
+) -> Result<(), String> {
+    let outcome = {
+        let mut machine = runtime
+            .machine
+            .lock()
+            .map_err(|_| "E_STATE_ILLEGAL".to_string())?;
+        machine.transition(SessionEvent::Cancel, 0)
+    };
+
+    if !matches!(outcome, Ok(Outcome::Idle)) {
+        return Err("E_STATE_ILLEGAL".to_string());
+    }
+
+    app_state.set_locked(false);
+    overlay::unlock_screen(&app);
+
+    let _ = app.emit(
+        "state://changed",
+        StateChanged {
+            state: SessionState::Idle.as_str().to_string(),
+            result: None,
+            goal: None,
+            elapsed_ms: 0,
+            target_ms: 0,
+        },
+    );
+
+    log::info!("[ipc] 起势已取消");
+    Ok(())
 }
 
 #[tauri::command]
