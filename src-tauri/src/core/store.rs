@@ -94,6 +94,7 @@ pub struct SessionSnapshot {
     pub goal: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct Store {
     root: PathBuf,
 }

@@ -18,7 +18,7 @@
         "width": 900,
         "height": 640,
         "resizable": false,
-        "decorations": false,
+        "decorations": true,
         "visible": false,
         "center": true
       }

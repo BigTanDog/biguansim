@@ -9,6 +9,11 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    watch: {
+      // 不监视 Rust 产物：cargo 编译时 target/debug 下的 dll 被占用，
+      // Vite 的 watcher 会报 EBUSY 并把整个 dev 流程带崩。
+      ignored: ['**/src-tauri/**'],
+    },
   },
   envPrefix: ['VITE_', 'TAURI_'],
   build: {
