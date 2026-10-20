@@ -17,8 +17,6 @@ pub const VK_F4: u16 = 0x73;
 
 /// 放行 `Win+L`（PRD F-3.4：允许锁屏离开）
 const VK_L: u16 = 0x4C;
-/// Win 组合键里要吞掉的功能键与字母键（E/D/R/I/S/X，以及 F11 等由 Win 分支统一处理）
-const WIN_BLOCKED_KEYS: [u16; 6] = [0x45, 0x44, 0x52, 0x49, 0x53, 0x58];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ModState {
@@ -87,11 +85,6 @@ pub fn decide(vk: u16, is_down: bool, state: &mut ModState) -> Verdict {
 
     // 6. 无修饰键或无命中：放行（音量键、输入法切换等都落在这里）
     Verdict::Pass
-}
-
-/// 供日志与排障：这个键是否在"Win 组合键黑名单"里
-pub fn is_win_blocked_key(vk: u16) -> bool {
-    WIN_BLOCKED_KEYS.contains(&vk)
 }
 
 #[cfg(test)]

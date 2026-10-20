@@ -23,6 +23,11 @@ pnpm tauri dev        # 开发模式（Vite + Tauri 窗口）
 pnpm tauri build      # 产出 src-tauri/target/release/biguansim.exe
 ```
 
+> 复验前请**新开一个终端**：`RUSTUP_HOME` / `CARGO_HOME` 写在用户环境变量里，
+> 已在运行的 shell 读不到，会误报 `no default toolchain configured`。
+> 脚本里一次性调用时显式带上 `RUSTUP_HOME=D:\DevTools\rustup`、`CARGO_HOME=D:\DevTools\cargo`。
+> debug 版走 `devUrl`，需要 `pnpm dev` 或 `pnpm tauri dev` 配合；单独双击 debug exe 会显示"localhost 拒绝连接"。
+
 自动化检查（提交前必须全绿，逐条对应 AGENTS §1）：
 
 ```bash
@@ -46,10 +51,10 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## 文档
 
-| 文档                          | 作用                                           |
-| ----------------------------- | ---------------------------------------------- |
-| `AGENTS.md`                   | 仓库约束（技术栈、工作流、红军线、交付物规范） |
-| `docs/闭关模拟器-PRD-v0.1.md` | 产品口径唯一来源                               |
-| `docs/闭关模拟器-TDD-v0.1.md` | 技术设计与接口                                 |
-| `docs/plans/`                 | 总计划与各阶段计划（含执行看板）               |
-| `docs/decisions/`             | 决策记录（一条决策一个文件）                   |
+| 文档                          | 作用                                         |
+| ----------------------------- | -------------------------------------------- |
+| `AGENTS.md`                   | 仓库约束（技术栈、工作流、红线、交付物规范） |
+| `docs/闭关模拟器-PRD-v0.1.md` | 产品口径唯一来源                             |
+| `docs/闭关模拟器-TDD-v0.1.md` | 技术设计与接口                               |
+| `docs/plans/`                 | 总计划与各阶段计划（含执行看板）             |
+| `docs/decisions/`             | 决策记录（一条决策一个文件）                 |
