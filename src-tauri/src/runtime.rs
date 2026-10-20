@@ -27,7 +27,7 @@ use crate::events::{ArmingTick, Chime, StateChanged, TimerTick};
 use crate::io_queue::IoJob;
 use crate::platform::log as plog;
 use crate::platform::time::{SystemMonotonic, SystemWall};
-use crate::platform::{hook, overlay, power};
+use crate::platform::{display, focus, hook, overlay, power, sleep};
 
 /// 快照落盘间隔（TDD §4.8）
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(15);
@@ -71,9 +71,29 @@ pub fn init(app: &AppHandle) -> Arc<Runtime> {
     });
 
     spawn_power(runtime.clone());
+    display::spawn(app.clone(), runtime.clone());
     spawn_tick(app.clone(), runtime.clone());
 
     runtime
+}
+
+/// 强制结算（显示变化等外部事件用）。判定仍然只走 `transition`。
+pub fn force_settle(app: &AppHandle, runtime: &Arc<Runtime>, result: SessionResult) {
+    let elapsed = read_timer(runtime).map(|(elapsed, _)| elapsed).unwrap_or(0);
+
+    let outcome = {
+        let mut machine = match runtime.machine.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        machine.transition(SessionEvent::Finish { result }, elapsed)
+    };
+
+    match outcome {
+        Ok(Outcome::Settled { result, session }) => finish(app, runtime, result, &session),
+        Ok(other) => ::log::warn!("[ipc] 强制结算未生效：{other:?}"),
+        Err(err) => ::log::warn!("[ipc] 强制结算被拒：{err:?}"),
+    }
 }
 
 /// 启动时发现残留快照 → 说明上次是崩溃/被杀。不续锁，记一条 `interrupted`。
@@ -327,6 +347,19 @@ fn step_arming(app: &AppHandle, runtime: &Arc<Runtime>) {
         },
     );
 
+    // 结界的三件套要在进入 Locked 后才生效：起势期间还允许 Esc 取消
+    if let Some(window) = app.get_webview_window(overlay::MAIN_LABEL) {
+        match window.hwnd() {
+            Ok(hwnd) => {
+                if let Err(err) = focus::start(hwnd.0 as isize) {
+                    ::log::error!("[focus] 启动失败：{err}");
+                }
+            }
+            Err(err) => ::log::error!("[focus] 取窗口句柄失败：{err}"),
+        }
+    }
+    sleep::block();
+
     ::log::info!("[tick] 起势结束，进入闭关");
 }
 
@@ -351,6 +384,9 @@ pub fn finish(
     }
 
     hook::uninstall();
+    // 先停抢焦点再解锁，否则它会在窗口恢复标题栏的过程中继续抢
+    focus::stop();
+    sleep::allow();
     overlay::unlock_screen(app);
 
     let record = Record {

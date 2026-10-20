@@ -14,6 +14,14 @@ pub fn run() {
     platform::log::init();
     ::log::info!("启动 biguansim {}", env!("CARGO_PKG_VERSION"));
 
+    // 熄屏唤醒后 WebView2 默认会先判"窗口不可见"而暂停渲染，回来是白屏再跳数。
+    // 关掉遮挡检测才能满足 U-7 的"1 秒内正确重绘"。
+    // 注意：该变量必须在 WebView2 首次初始化之前设置。
+    std::env::set_var(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "--disable-features=CalculateNativeWinOcclusion",
+    );
+
     let builder = tauri::Builder::default()
         .manage(app_state::AppState::default())
         // F-1.7：第二次启动只唤前台；锁定期间第二实例什么都不做

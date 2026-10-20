@@ -259,6 +259,8 @@ pub fn dev_abort(
 
     app_state.set_locked(false);
     hook::uninstall();
+    crate::platform::focus::stop();
+    crate::platform::sleep::allow();
     overlay::unlock_screen(&app);
     let _ = runtime.io_tx.send(crate::io_queue::IoJob::ClearSnapshot);
 
