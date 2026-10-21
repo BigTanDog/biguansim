@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 import ConfirmPanel from '../components/ConfirmPanel.vue'
 import CopyPanel from '../components/CopyPanel.vue'
@@ -32,6 +32,71 @@ const clockTimer = window.setInterval(() => {
   now.value = new Date()
 }, 1_000)
 onUnmounted(() => window.clearInterval(clockTimer))
+
+/**
+ * Esc 长按的**界面侧**计时（D-45）。
+ *
+ * 真机上低级键盘钩子收不到 Esc（三份日志一条 `[esc]` 都没有），但 WebView 能收到。
+ * 所以这里自己计时满 8 秒后调 `request_emergency`；钩子路径若恢复了也仍然有效，
+ * 两条路都只开在 Locked，冷却/问阵里按了不会有任何事。
+ */
+const ESC_TOTAL_MS = 8_000
+const escLocalMs = ref(0)
+let escTimer: number | undefined
+let escFired = false
+
+const escHold = computed(() => Math.max(store.escHoldMs, escLocalMs.value))
+
+function stopEscTimer(): void {
+  window.clearInterval(escTimer)
+  escTimer = undefined
+}
+
+function onEscKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || event.repeat || isMirror) {
+    return
+  }
+  if (store.state !== 'Locked') {
+    // 冷却/问阵里按 Esc 不做任何事：开这个口子等于绕过冷却（F-4.1）
+    return
+  }
+
+  stopEscTimer()
+  escLocalMs.value = 0
+  escFired = false
+  const startedAt = performance.now()
+
+  escTimer = window.setInterval(() => {
+    escLocalMs.value = performance.now() - startedAt
+    if (!escFired && escLocalMs.value >= ESC_TOTAL_MS) {
+      escFired = true
+      stopEscTimer()
+      ipc.requestEmergency().catch((err: unknown) => {
+        store.notify('error', `破戒通道未能打开：${String(err)}`)
+      })
+    }
+  }, 100)
+}
+
+function onEscKeyup(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') {
+    return
+  }
+  stopEscTimer()
+  escLocalMs.value = 0
+  escFired = false
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onEscKeydown)
+  window.addEventListener('keyup', onEscKeyup)
+})
+
+onUnmounted(() => {
+  stopEscTimer()
+  window.removeEventListener('keydown', onEscKeydown)
+  window.removeEventListener('keyup', onEscKeyup)
+})
 
 const unlocking = ref(false)
 
@@ -130,10 +195,7 @@ const confirmPayload = computed(() => (store.payload?.kind === 'confirm' ? store
       </div>
     </section>
 
-    <EscRing
-      v-if="!isMirror && store.state === 'Locked' && store.escHoldMs > 0"
-      :held-ms="store.escHoldMs"
-    />
+    <EscRing v-if="!isMirror && store.state === 'Locked' && escHold > 0" :held-ms="escHold" />
 
     <button v-if="devMode && !isMirror" class="dev-exit" type="button" @click="devExit">
       DEV 退出（不记录）

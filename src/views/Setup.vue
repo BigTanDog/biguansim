@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
+import { formatElapsed } from '../lib/format'
 import { useSessionStore } from '../stores/session'
 
 const PRESETS = [25, 45, 60, 90, 120, 180] as const
@@ -46,6 +47,21 @@ function pick(preset: number): void {
       <h1 class="setup__title">闭关模拟器</h1>
       <p class="setup__hint">选定闭关时长，入关后电脑将被全屏接管。</p>
     </header>
+
+    <!-- 二级入口（F-1.6）：不建独立窗口，Idle 下切换视图 -->
+    <nav class="nav">
+      <button class="nav__item" type="button" @click="store.openRecords()">
+        <span class="nav__label">闭关记录</span>
+        <span class="nav__value num">
+          累计 {{ formatElapsed(store.stats?.totalMs ?? 0) }} · 连续
+          {{ store.stats?.streakDays ?? 0 }} 天
+        </span>
+      </button>
+      <button class="nav__item" type="button" @click="store.openBank()">
+        <span class="nav__label">题库</span>
+        <span class="nav__value num">{{ store.bankTotal }} 题</span>
+      </button>
+    </nav>
 
     <section v-if="store.lastSession" class="notice">
       <p class="notice__title">上次闭关异常中断，已自动解除。</p>
@@ -138,6 +154,40 @@ function pick(preset: number): void {
   margin-top: 6px;
   color: var(--fg-muted);
   font-size: 12px;
+}
+
+.nav {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1.6fr 1fr;
+}
+
+.nav__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--radius-card);
+  background: var(--dialog-bg);
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.nav__item:hover {
+  border-color: var(--accent);
+}
+
+.nav__label {
+  color: var(--fg-muted);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+.nav__value {
+  font-size: 13px;
 }
 
 .card {

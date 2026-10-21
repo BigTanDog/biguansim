@@ -1,5 +1,6 @@
 //! IPC 命令（TDD §5.1）。入关/取消/查询在这里，退出流程的五个命令在 `exit.rs`。
 
+pub mod data;
 pub mod exit;
 
 use std::sync::Arc;
@@ -49,6 +50,8 @@ pub struct BankView {
 pub struct BootstrapView {
     config: Config,
     bank: BankView,
+    /// 累计 / 连续天数 / 破戒（F-1.4）
+    stats: data::StatsView,
     /// 上次异常中断的会话（本次启动时已记入记录）；正常启动为 None
     last_session: Option<LastSessionView>,
     /// 是否 debug 构建：前端据此显示 DEV 退出按钮与"测试版"提示。
@@ -106,6 +109,7 @@ pub fn bootstrap(runtime: State<'_, Arc<Runtime>>) -> BootstrapView {
         config,
         bank,
         last_session,
+        stats: data::stats_view(&runtime),
         debug_build: cfg!(debug_assertions),
     }
 }

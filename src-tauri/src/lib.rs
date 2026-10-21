@@ -48,10 +48,15 @@ pub fn run() {
     #[cfg(debug_assertions)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         commands::bootstrap,
+        commands::data::list_records,
+        commands::data::list_questions,
+        commands::data::update_config,
+        commands::data::open_data_dir,
         commands::start_session,
         commands::cancel_arming,
         commands::get_state,
         commands::exit::request_unlock,
+        commands::exit::request_emergency,
         commands::exit::submit_choice,
         commands::exit::submit_copy,
         commands::exit::confirm_emergency,
@@ -62,10 +67,15 @@ pub fn run() {
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         commands::bootstrap,
+        commands::data::list_records,
+        commands::data::list_questions,
+        commands::data::update_config,
+        commands::data::open_data_dir,
         commands::start_session,
         commands::cancel_arming,
         commands::get_state,
         commands::exit::request_unlock,
+        commands::exit::request_emergency,
         commands::exit::submit_choice,
         commands::exit::submit_copy,
         commands::exit::confirm_emergency,

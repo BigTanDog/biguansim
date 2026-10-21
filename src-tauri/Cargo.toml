@@ -34,6 +34,9 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_Accessibility",
   # 抢焦点要按"窗口所在显示器"的完整矩形还原（Win+D 之后 SW_RESTORE 会掉回普通尺寸）
   "Win32_Graphics_Gdi",
+  # 记录按本地日归属：FileTimeToSystemTime + SystemTimeToTzSpecificLocalTime
+  "Win32_Storage_FileSystem",
+  "Win32_System_Time",
 ] }
 
 [profile.release]

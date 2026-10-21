@@ -8,6 +8,9 @@ import * as ipc from '../lib/ipc'
 /** 视图路由只有四个：闭关中的五种投影共用 lock */
 export type Phase = 'setup' | 'arming' | 'lock' | 'settled'
 
+/** Idle 下的二级页面（F-1.6：不建独立窗口） */
+export type View = 'setup' | 'records' | 'bank'
+
 /** 错误码 → 人话（PRD §12 / F-4.5）。未收录的码原样显示，便于排障 */
 const ERROR_TEXT: Record<string, string> = {
   E_REMAIN_TOO_SHORT: '距出关不足一次冷却，请稍候到点。',
@@ -28,6 +31,11 @@ export function errorText(err: unknown): string {
 
 export const useSessionStore = defineStore('session', () => {
   const phase = ref<Phase>('setup')
+  const view = ref<View>('setup')
+  /** 累计 / 连续 / 破戒 / 有效日：全部由 Rust 算，前端只显示 */
+  const stats = ref<ipc.StatsView | null>(null)
+  const recordsPage = ref<ipc.RecordPage | null>(null)
+  const questions = ref<ipc.QuestionSummary[]>([])
   const state = ref<ipc.SessionStateName>('Idle')
   const payload = ref<ipc.PhasePayload | null>(null)
   const ready = ref(false)
@@ -131,6 +139,7 @@ export const useSessionStore = defineStore('session', () => {
       bankName.value = boot.bank.name || '基础阵法'
       bankTotal.value = boot.bank.total
       debugBuild.value = boot.debugBuild
+      stats.value = boot.stats
       lastSession.value = boot.lastSession
       applyState(await ipc.getState())
 
@@ -191,6 +200,8 @@ export const useSessionStore = defineStore('session', () => {
             result.value = changed.result
             elapsedMs.value = changed.elapsedMs
             payload.value = null
+            // 结算页要显示累计与连续天数：出关时重取一次统计
+            void refreshStats()
             break
           default:
             setState('Idle')
@@ -308,11 +319,45 @@ export const useSessionStore = defineStore('session', () => {
 
   function backToSetup(): void {
     setState('Idle')
+    view.value = 'setup'
     result.value = null
     payload.value = null
     elapsedMs.value = 0
     remainingMs.value = 0
     targetMs.value = 0
+  }
+
+  async function refreshStats(): Promise<void> {
+    try {
+      const page = await ipc.listRecords(1)
+      stats.value = page.stats
+    } catch (err) {
+      lastError.value = String(err)
+    }
+  }
+
+  /** Idle 下打开记录页（F-1.6 的二级入口） */
+  async function openRecords(): Promise<void> {
+    view.value = 'records'
+    try {
+      recordsPage.value = await ipc.listRecords(50)
+      stats.value = recordsPage.value.stats
+    } catch (err) {
+      lastError.value = String(err)
+    }
+  }
+
+  async function openBank(): Promise<void> {
+    view.value = 'bank'
+    try {
+      questions.value = await ipc.listQuestions()
+    } catch (err) {
+      lastError.value = String(err)
+    }
+  }
+
+  function closeSubPage(): void {
+    view.value = 'setup'
   }
 
   return {
@@ -342,8 +387,16 @@ export const useSessionStore = defineStore('session', () => {
     coolRemainMs,
     escHoldMs,
     progress,
+    view,
+    stats,
+    recordsPage,
+    questions,
     notify,
     refresh,
+    refreshStats,
+    openRecords,
+    openBank,
+    closeSubPage,
     init,
     start,
     cancelArming,

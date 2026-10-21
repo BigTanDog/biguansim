@@ -37,6 +37,12 @@ impl LocalDate {
     }
 }
 
+/// Unix 毫秒 → **UTC** 日期。只作为 Win32 时区换算失败时的兜底（`platform::time`）。
+pub fn date_from_unix_ms_utc(ms: i64) -> LocalDate {
+    let (year, month, day) = civil_from_days(ms.div_euclid(86_400_000));
+    LocalDate { year, month, day }
+}
+
 /// 一条记录在统计层的形状
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DatedRecord {

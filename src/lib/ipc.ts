@@ -26,9 +26,44 @@ export interface BankInfo {
   total: number
 }
 
+/** 统计口径全在 Rust（`core::stats`），前端只负责显示 */
+export interface StatsView {
+  totalMs: number
+  sessions: number
+  faults: number
+  validDays: number
+  streakDays: number
+  todayValid: boolean
+}
+
+export interface RecordView {
+  startedAtMs: number
+  actualMs: number
+  plannedMs: number
+  result: string
+  attempts: number
+}
+
+export interface RecordPage {
+  records: RecordView[]
+  /** 损坏行数：>0 时界面必须提示（PRD §12） */
+  skipped: number
+  stats: StatsView
+}
+
+export interface QuestionSummary {
+  id: string
+  stem: string
+  tags: string[]
+  rightCount: number
+  wrongCount: number
+  cooling: boolean
+}
+
 export interface BootstrapView {
   config: Config
   bank: BankInfo
+  stats: StatsView
   /** 上次异常中断的会话；正常启动为 null */
   lastSession: LastSession | null
   /** debug 构建才为 true：前端据此显示 DEV 退出按钮与测试版提示 */
@@ -141,6 +176,18 @@ export const startSession = (
 
 export const getState = (): Promise<StateView> => invoke('get_state')
 
+/** 记录页（按开始时间倒序） */
+export const listRecords = (limit: number): Promise<RecordPage> => invoke('list_records', { limit })
+
+/** 题库页：只有题面与统计，没有答案 */
+export const listQuestions = (): Promise<QuestionSummary[]> => invoke('list_questions')
+
+/** 设置页：浅合并 patch，非法值返回 E_INVALID_CONFIG 且不落盘 */
+export const updateConfig = (patch: Partial<Config>): Promise<Config> =>
+  invoke('update_config', { patch })
+
+export const openDataDir = (): Promise<void> => invoke('open_data_dir')
+
 /** 起势 3 秒内取消；非 Arming 状态会返回 E_STATE_ILLEGAL */
 export const cancelArming = (): Promise<void> => invoke('cancel_arming')
 
@@ -160,6 +207,12 @@ export const confirmEmergency = (text: string): Promise<void> =>
   invoke('confirm_emergency', { text })
 
 export const cancelEmergency = (): Promise<void> => invoke('cancel_emergency')
+
+/**
+ * 界面侧 Esc 长按满 8 秒后调用（D-45）。真机上 `WH_KEYBOARD_LL` 收不到 Esc，
+ * 所以计时改由 WebView 负责；`Locked` 之外调用会返回 `E_STATE_ILLEGAL`。
+ */
+export const requestEmergency = (): Promise<void> => invoke('request_emergency')
 
 export const onTick = (handler: (tick: TimerTick) => void): Promise<UnlistenFn> =>
   listen<TimerTick>('timer://tick', (event) => handler(event.payload))

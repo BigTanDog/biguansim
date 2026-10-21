@@ -261,6 +261,40 @@ pub fn submit_copy(
     }
 }
 
+/// 前端侧的 Esc 长按兜底（D-45）：Locked → Confirming。
+///
+/// 为什么要有这条：2026-10-21 真机上 `WH_KEYBOARD_LL` 收不到 Esc（三份日志里
+/// `[esc]` 一行都没有，而同一钩子拦得住 `Alt+Tab`/`Win+E`），原因未查明。
+/// 与其让"急事破戒"完全不可用，不如承认前端也能收到 Esc，把**计时**放到界面里。
+///
+/// 代价（必须说清）：8 秒门槛由界面负责，Rust 无法复核；
+/// 因此"能不能破戒"就从"必须按住 8 秒"弱化成"必须走完 8 秒 + 逐字抄 9 字"。
+/// 对"防手滑"仍成立，对"防脚本"不再成立——门仍然只在 Locked 开。
+#[tauri::command]
+pub fn request_emergency(app: AppHandle, runtime: State<'_, Arc<Runtime>>) -> Result<(), String> {
+    let elapsed = elapsed_of(&runtime);
+    let outcome = {
+        let mut machine = runtime
+            .machine
+            .lock()
+            .map_err(|_| "E_STATE_ILLEGAL".to_string())?;
+        machine.transition(SessionEvent::RequestEmergency, elapsed)
+    };
+
+    match outcome {
+        Ok(Outcome::Confirming) => {
+            publish_state(&app, &runtime);
+            ::log::info!("[exit] 界面侧 Esc 长按满 8 秒，进入破戒确认");
+            Ok(())
+        }
+        Ok(other) => {
+            ::log::warn!("[exit] 界面请求破戒未生效：{other:?}");
+            Err("E_STATE_ILLEGAL".to_string())
+        }
+        Err(err) => Err(map_error(err)),
+    }
+}
+
 /// Confirming → Settled(emergency)（PRD F-6.2）
 #[tauri::command]
 pub fn confirm_emergency(
