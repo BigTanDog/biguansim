@@ -48,6 +48,12 @@ const dash = computed(() => store.progress * CIRCUMFERENCE)
 const clockLabel = computed(() => formatClockLabel(now.value, store.clockSkewMin))
 const clockSuspect = computed(() => Math.abs(store.clockSkewMin) > SKEW_THRESHOLD_MIN)
 
+/**
+ * 「正在通知长老，请稍候。」是**看守弟子**去通报，不是长老自己说自己。
+ * 其余场景（叙述/问阵/抄写/破戒确认）都是长老在讲。
+ */
+const speaker = computed(() => (store.state === 'Cool' ? '看守弟子' : '长老'))
+
 const exitPayload = computed(() =>
   store.payload && (store.payload.kind === 'cool' || store.payload.kind === 'challenge')
     ? store.payload
@@ -85,39 +91,43 @@ const confirmPayload = computed(() => (store.payload?.kind === 'confirm' ? store
     </section>
 
     <section v-if="!isMirror" class="dialog">
-      <p class="dialog__speaker">长老</p>
+      <p class="dialog__speaker">{{ speaker }}</p>
 
-      <!-- Locked：叙述 + 常驻的「解开阵法」（U-5：不隐藏、不淡化） -->
-      <template v-if="store.state === 'Locked'">
-        <p class="dialog__line">已入关。若遇急事，长按 Esc 八秒可破戒。</p>
-        <p class="dialog__line dialog__line--muted">道友，此关已开，莫问还有几时——问，便是想走。</p>
-        <div class="dialog__actions">
-          <button class="dialog__unlock" type="button" :disabled="unlocking" @click="unlock">
-            解开阵法
-          </button>
-        </div>
-      </template>
+      <div class="dialog__body">
+        <!-- Locked：叙述 + 常驻的「解开阵法」（U-5：不隐藏、不淡化） -->
+        <template v-if="store.state === 'Locked'">
+          <p class="dialog__line">已入关。若遇急事，长按 Esc 八秒可破戒。</p>
+          <p class="dialog__line dialog__line--muted">
+            道友，此关已开，莫问还有几时——问，便是想走。
+          </p>
+          <div class="dialog__actions">
+            <button class="dialog__unlock" type="button" :disabled="unlocking" @click="unlock">
+              解开阵法
+            </button>
+          </div>
+        </template>
 
-      <!-- Cool / Challenge -->
-      <ExitPanel
-        v-else-if="exitPayload"
-        :payload="exitPayload"
-        :cool-remain-ms="store.coolRemainMs"
-        :elapsed-ms="store.elapsedMs"
-        :notice="store.notice"
-        @choose="store.choose"
-      />
+        <!-- Cool / Challenge -->
+        <ExitPanel
+          v-else-if="exitPayload"
+          :payload="exitPayload"
+          :cool-remain-ms="store.coolRemainMs"
+          :elapsed-ms="store.elapsedMs"
+          :notice="store.notice"
+          @choose="store.choose"
+        />
 
-      <!-- Copying -->
-      <CopyPanel v-else-if="copyPayload" :text="copyPayload.text" :chars="copyPayload.chars" />
+        <!-- Copying -->
+        <CopyPanel v-else-if="copyPayload" :text="copyPayload.text" :chars="copyPayload.chars" />
 
-      <!-- Confirming -->
-      <ConfirmPanel
-        v-else-if="confirmPayload"
-        :sentence="confirmPayload.sentence"
-        :elapsed-ms="confirmPayload.elapsedMs"
-        :faults="confirmPayload.faults"
-      />
+        <!-- Confirming -->
+        <ConfirmPanel
+          v-else-if="confirmPayload"
+          :sentence="confirmPayload.sentence"
+          :elapsed-ms="confirmPayload.elapsedMs"
+          :faults="confirmPayload.faults"
+        />
+      </div>
     </section>
 
     <EscRing
@@ -226,13 +236,20 @@ const confirmPayload = computed(() => (store.payload?.kind === 'confirm' ? store
 .dialog {
   position: relative;
   align-self: stretch;
-  max-height: 42vh;
-  min-height: 120px;
-  overflow: auto;
-  padding: 18px 20px;
+  min-height: 132px;
+  padding: 20px 20px 16px;
   border: 1px solid var(--dialog-border);
   border-radius: var(--radius-card);
   background: var(--dialog-bg);
+  /* 不能在这里滚动：说话人标签是 top:-10px 的绝对定位元素，
+     父级一旦 overflow:auto 就会把它裁掉（2026-10-21 实测"长老看不全"）。
+     滚动交给内层 .dialog__body。 */
+  overflow: visible;
+}
+
+.dialog__body {
+  max-height: 38vh;
+  overflow: auto;
 }
 
 .dialog__speaker {
