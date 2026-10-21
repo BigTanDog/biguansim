@@ -19,6 +19,7 @@ pub const MAIN_LABEL: &str = "main";
 /// Idle 态窗口尺寸（M1 用一个固定大小的配置页）
 pub const IDLE_SIZE: (u32, u32) = (900, 640);
 
+#[derive(Clone, Copy)]
 struct Rect {
     x: i32,
     y: i32,
@@ -83,9 +84,21 @@ pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
         window.show().map_err(|e| e.to_string())?;
     }
 
+    // 记下矩形：keeper 每秒据此重摆（`Win+D` 还原后窗口会掉回普通尺寸，见 keeper 的注释）
+    if let Ok(mut guard) = LOCKED_RECTS.lock() {
+        *guard = rects.clone();
+    }
+
     // `AppState.locked` 的 true 只由 commands::start_session 在调用本函数**之前**置位，
     // 否则下面这个 keeper 线程会先看到 false 然后立刻退出（掷硬币，实测会随机失效）。
-    log::info!("结界已展开，共 {} 块屏", rects.len());
+    log::info!(
+        "结界已展开，共 {} 块屏，主屏 {}×{} @ ({}, {})",
+        rects.len(),
+        rects[0].width,
+        rects[0].height,
+        rects[0].x,
+        rects[0].y
+    );
 
     spawn_topmost_keeper(app.clone());
     Ok(())
@@ -94,6 +107,9 @@ pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
 pub fn unlock_screen(app: &AppHandle) {
     // 幂等清理：调用方忘了置 false 也不会让窗口永远置顶
     app.state::<AppState>().set_locked(false);
+    if let Ok(mut guard) = LOCKED_RECTS.lock() {
+        guard.clear();
+    }
 
     for (label, window) in app.webview_windows() {
         if label.starts_with(SECONDARY_PREFIX) {
@@ -116,25 +132,50 @@ pub fn unlock_screen(app: &AppHandle) {
 /// Locked 期间每 1 s 重申一次（TDD §4.3）。
 ///
 /// **同时兜住"显示桌面"（`Win+D`）**：它会把窗口最小化，只重申 topmost 是没用的，
-/// 桌面照样露出来。2026-10-20 实测过这个故障（桌面可见 + 键盘仍被吞 → 只能杀进程），
-/// 所以这里必须每秒检查一次最小化并还原。
+/// 桌面照样露出来。2026-10-20 实测过这个故障（桌面可见 + 键盘仍被吞 → 只能杀进程）。
+///
+/// 2026-10-21 又踩了一次：`unminimize()` 走的是 `ShowWindow(SW_RESTORE)`，它会把窗口
+/// **还原成"普通窗口矩形"**（900×640 那一套），全屏几何就此丢失，之后桌面一直露在左边。
+/// 所以还原之后必须**重新按显示器矩形摆位**——这里干脆每秒无条件重摆一次，
+/// 幂等、便宜，也顺手治好了任何几何漂移。
 fn spawn_topmost_keeper(app: AppHandle) {
     thread::spawn(move || {
         while app.state::<AppState>().is_locked() {
-            for (label, window) in app.webview_windows() {
-                if label == MAIN_LABEL || label.starts_with(SECONDARY_PREFIX) {
-                    if window.is_minimized().unwrap_or(false) {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        log::warn!("[overlay] 窗口被最小化（显示桌面？），已还原：{label}");
-                    }
-                    let _ = window.set_always_on_top(true);
+            let rects = locked_rects();
+
+            for (index, rect) in rects.iter().enumerate() {
+                let label = if index == 0 {
+                    MAIN_LABEL.to_string()
+                } else {
+                    format!("{SECONDARY_PREFIX}{index}")
+                };
+                let Some(window) = app.get_webview_window(&label) else {
+                    continue;
+                };
+
+                if window.is_minimized().unwrap_or(false) {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    log::warn!("[overlay] 窗口被最小化（显示桌面？），已还原并重摆：{label}");
                 }
+                let _ = place(&window, rect);
+                let _ = window.set_always_on_top(true);
             }
+
             thread::sleep(Duration::from_secs(1));
         }
     });
 }
+
+/// 进入 Locked 时记下的每块屏矩形，供 keeper 每秒重摆。`None`/空表示当前不在结界里。
+fn locked_rects() -> Vec<Rect> {
+    LOCKED_RECTS
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+static LOCKED_RECTS: std::sync::Mutex<Vec<Rect>> = std::sync::Mutex::new(Vec::new());
 
 fn place(window: &tauri::WebviewWindow, rect: &Rect) -> Result<(), String> {
     window

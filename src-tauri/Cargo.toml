@@ -32,6 +32,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Accessibility",
+  # 抢焦点要按"窗口所在显示器"的完整矩形还原（Win+D 之后 SW_RESTORE 会掉回普通尺寸）
+  "Win32_Graphics_Gdi",
 ] }
 
 [profile.release]
