@@ -2,6 +2,10 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { computed, onUnmounted, ref } from 'vue'
 
+import ConfirmPanel from '../components/ConfirmPanel.vue'
+import CopyPanel from '../components/CopyPanel.vue'
+import EscRing from '../components/EscRing.vue'
+import ExitPanel from '../components/ExitPanel.vue'
 import { formatClockLabel, formatCountdown, formatElapsed, SKEW_THRESHOLD_MIN } from '../lib/format'
 import * as ipc from '../lib/ipc'
 import { useSessionStore } from '../stores/session'
@@ -29,9 +33,28 @@ const clockTimer = window.setInterval(() => {
 }, 1_000)
 onUnmounted(() => window.clearInterval(clockTimer))
 
+const unlocking = ref(false)
+
+async function unlock(): Promise<void> {
+  if (unlocking.value) {
+    return
+  }
+  unlocking.value = true
+  await store.requestUnlock()
+  unlocking.value = false
+}
+
 const dash = computed(() => store.progress * CIRCUMFERENCE)
 const clockLabel = computed(() => formatClockLabel(now.value, store.clockSkewMin))
 const clockSuspect = computed(() => Math.abs(store.clockSkewMin) > SKEW_THRESHOLD_MIN)
+
+const exitPayload = computed(() =>
+  store.payload && (store.payload.kind === 'cool' || store.payload.kind === 'challenge')
+    ? store.payload
+    : null,
+)
+const copyPayload = computed(() => (store.payload?.kind === 'copy' ? store.payload : null))
+const confirmPayload = computed(() => (store.payload?.kind === 'confirm' ? store.payload : null))
 </script>
 
 <template>
@@ -62,12 +85,44 @@ const clockSuspect = computed(() => Math.abs(store.clockSkewMin) > SKEW_THRESHOL
 
     <section v-if="!isMirror" class="dialog">
       <p class="dialog__speaker">长老</p>
-      <p class="dialog__line">道友，且坐。此关已开，莫问还有几时——问，便是想走。</p>
-      <p class="dialog__line dialog__line--muted">
-        本版破戒通道尚未接入（长按 Esc
-        无效）：如需退出，请用任务管理器结束进程，本次将记为「异常中断」，时长仍计入累计。
-      </p>
+
+      <!-- Locked：叙述 + 常驻的「解开阵法」（U-5：不隐藏、不淡化） -->
+      <template v-if="store.state === 'Locked'">
+        <p class="dialog__line">已入关。若遇急事，长按 Esc 八秒可破戒。</p>
+        <p class="dialog__line dialog__line--muted">道友，此关已开，莫问还有几时——问，便是想走。</p>
+        <div class="dialog__actions">
+          <button class="dialog__unlock" type="button" :disabled="unlocking" @click="unlock">
+            解开阵法
+          </button>
+        </div>
+      </template>
+
+      <!-- Cool / Challenge -->
+      <ExitPanel
+        v-else-if="exitPayload"
+        :payload="exitPayload"
+        :cool-remain-ms="store.coolRemainMs"
+        :elapsed-ms="store.elapsedMs"
+        :notice="store.notice"
+        @choose="store.choose"
+      />
+
+      <!-- Copying -->
+      <CopyPanel v-else-if="copyPayload" :text="copyPayload.text" :chars="copyPayload.chars" />
+
+      <!-- Confirming -->
+      <ConfirmPanel
+        v-else-if="confirmPayload"
+        :sentence="confirmPayload.sentence"
+        :elapsed-ms="confirmPayload.elapsedMs"
+        :faults="confirmPayload.faults"
+      />
     </section>
+
+    <EscRing
+      v-if="!isMirror && store.state === 'Locked' && store.escHoldMs > 0"
+      :held-ms="store.escHoldMs"
+    />
 
     <button v-if="devMode && !isMirror" class="dev-exit" type="button" @click="devExit">
       DEV 退出（不记录）
@@ -165,7 +220,9 @@ const clockSuspect = computed(() => Math.abs(store.clockSkewMin) > SKEW_THRESHOL
 .dialog {
   position: relative;
   align-self: stretch;
+  max-height: 42vh;
   min-height: 120px;
+  overflow: auto;
   padding: 18px 20px;
   border: 1px solid var(--dialog-border);
   border-radius: var(--radius-card);
@@ -191,6 +248,28 @@ const clockSuspect = computed(() => Math.abs(store.clockSkewMin) > SKEW_THRESHOL
   margin-top: 8px;
   color: var(--fg-muted);
   font-size: 12px;
+}
+
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.dialog__unlock {
+  padding: 7px 18px;
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.dialog__unlock:hover:enabled {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .clock {

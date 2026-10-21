@@ -29,12 +29,10 @@ function onDevKeydown(event: KeyboardEvent): void {
     return
   }
   event.preventDefault()
-  ipc
-    .devAbort()
-    .catch((err: unknown) => {
-      // 静默失败过一次（2026-10-20 按键退出无效却没有任何提示），必须看得见
-      store.notify('error', `DEV 退出失败：${String(err)}`)
-    })
+  ipc.devAbort().catch((err: unknown) => {
+    // 静默失败过一次（2026-10-20 按键退出无效却没有任何提示），必须看得见
+    store.notify('error', `DEV 退出失败：${String(err)}`)
+  })
 }
 
 /** 闭关期间屏蔽刷新类快捷键与右键菜单（TDD §5.4） */
