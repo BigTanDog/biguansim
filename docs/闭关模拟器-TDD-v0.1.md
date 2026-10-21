@@ -100,10 +100,13 @@
 
 | 模块 | 职责 | 公开接口（要点） |
 |---|---|---|
-| `core::session` | 状态机、转移合法性、副作用编排（含 `Copying` 与全局到点规则） | `start() / request_unlock() / submit_choice() / submit_copy() / request_emergency() / confirm_emergency() / cancel_emergency() / on_deadline() / extend()` |
+| `core::session` | 八态状态机、转移合法性、成本口径、到点规则（副作用由调用方执行） | `transition(event, elapsed) -> Outcome`、`copy_chars()`、`note_fault()`、`reset()` |
 | `core::timer` | 单调计时 + 睡眠累计 + 时间篡改检测 | `elapsed_ms() -> u64`、`suspect_clock_change() -> Option<i64>` |
-| `core::cost` | 退出成本公式 | `cooldown_ms(n)`、`question_count(n)`、`copy_chars(n)` |
-| `core::bank` | 题库加载、抽题、判分、记忆衰减 | `draw(n) -> Vec<Question>`、`judge(qid, choice) -> bool`、`record_result()` |
+| `core::cost` | 退出成本公式（纯函数，基数为入参） | `cooldown_min/ms(n, base)`、`question_count(n, base)`、`copy_chars(n)` |
+| `core::bank` | 题库加载、校验、抽题（记忆衰减在 M5 接入） | `load(dir)`、`draw(n, &mut Rng) -> Vec<Question>` |
+| `core::challenge` | 选项打乱与逐题判定（答案不出 Rust） | `Round::prepare(questions, attempt, rng)`、`submit(choice) -> Judgement`、`view() -> QuestionView` |
+| `core::copy` | 抄写任务与逐字校验（不归一化） | `CopyTask::new(text)`、`check(target, typed) -> CopyVerdict` |
+| `core::rng` | 可复现随机数（xorshift64*，不引 `rand`） | `Rng::new(seed)`、`below(n)`、`shuffle(&mut [T])` |
 | `core::stats` | 累计/连续天数/破戒/有效日 | `summary(today) -> Stats` |
 | `core::quote` | 语料加载、阶段选择、变量渲染、防重复 | `pick(stage, kind, vars) -> String` |
 | `core::store` | 配置/流水/快照的读写与迁移 | `atomic_write(path, bytes)`、`append_jsonl()` |
@@ -310,13 +313,11 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 | `bootstrap` | — | `{ config, stats, todayValid, lastSession }` | 启动时一次 |
 | `start_session` | `{ durationMin, goal?, bankId }` | `{ ok, sessionId }` \| `{ error }` | **只进 `Arming`**，3 秒后由 tick 线程转 `Locked`；失败码见 §5.3。成功时写回 `config.lastDurationMin` |
 | `cancel_arming` | — | `{}` \| `{ error }` | `Arming` → `Idle`（F-2.2）；非 `Arming` 返回 `E_STATE_ILLEGAL` |
-| `request_unlock` | — | `{ cooldownMs, attempt }` | Locked → Cool |
-| `get_current_question` | — | `{ index, total, question }` | **仅用于前端重连/重绘**；抽题与推进由 Rust 在状态转移时主动推 `question://changed`，前端不得用它来"请求下一题" |
-| `submit_choice` | `{ questionId, choice }` | `{ correct, needsCopy, nextQuestion? }` | **判定在 Rust**。`choice` 是**打乱后的展示索引（0–3）**，Rust 内部映射回原始 `answer`；越界返回 `E_INVALID_CHOICE` |
+| `request_unlock` | — | `{ accepted, attempt, cooldownMs }` | Locked → Cool；剩余不足一次冷却返回 `E_REMAIN_TOO_SHORT`，状态不变（F-4.5） |
+| `submit_choice` | `{ questionId, choice }` | `{ accepted, correct }` | **判定在 Rust**。`choice` 是**打乱后的展示索引（0–3）**；`questionId` 与当前题不符或越界返回 `E_INVALID_CHOICE`。下一题由 `state://changed` 的 `payload` 推送，没有单独的"取题"命令 |
 | `submit_copy` | `{ text }` | `{ ok, mismatchIndex? }` | 逐字校验（不归一化全角半角）；返回首个不匹配位置供前端标红 |
-| `request_emergency` | — | `{ sentence }` | 进入 Confirming，下发抄写句。**只有 Rust 侧 `esc_hold_ms() ≥ 8000` 时才接受**，否则返回 `E_STATE_ILLEGAL` |
-| `confirm_emergency` | `{ text }` | `{ ok }` \| `{ error }` | 校验句子（9 字） |
-| `cancel_emergency` | — | `{ ok }` | 回 Locked |
+| `confirm_emergency` | `{ text }` | `{}` \| `{ error }` | 逐字校验 9 字；不一致返回 `E_CONFIRM_MISMATCH` |
+| `cancel_emergency` | — | `{}` | 回 Locked，不消耗成本，Esc 进度清零 |
 | `get_state` | — | `SessionState` 全量 | 前端重连/重绘用 |
 | `list_records` | `{ limit }` | `Record[]` | 记录页 |
 | `list_questions` | — | `QuestionSummary[]` | 题库页（不含答案） |
@@ -334,12 +335,12 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 
 | 事件 | 载荷 | 频率 |
 |---|---|---|
-| `state://changed` | `{ state, result?, goal, elapsedMs, targetMs }` | 状态转移时（含 `Arming`/`Locked`/`Settled`/`Idle`） |
-| `timer://tick` | `{ elapsedMs, remainingMs, clockSkewMin }` | 250 ms（仅 `Locked`） |
+| `state://changed` | `{ state, result?, goal, elapsedMs, targetMs, payload? }` | 状态转移时（八态全覆盖）。`payload` 按 `kind` 分支：`cool` / `challenge` / `copy` / `confirm`，是**活跃态的唯一投影来源** |
+| `timer://tick` | `{ elapsedMs, remainingMs, clockSkewMin }` | 250 ms（五个活跃态都推，倒计时不因进入冷却而中断） |
 | `arming://tick` | `{ remainingMs }` | 250 ms（仅 `Arming`，由 Rust 计时，前端只渲染 3-2-1） |
+| `cool://tick` | `{ remainMs }` | 250 ms（仅 `Cool`；界面只渲染分钟粒度） |
+| `esc://hold` | `{ heldMs }` | 250 ms（仅 `Locked` 且按住 Esc 时；只画进度环，**8 秒判定在 Rust**） |
 | `chime://play` | `{ kind: "tick" \| "bell", index }` | 剩余 10/7/4 秒各一次 `tick`；到点一次 `bell`（前端连响 3 声） |
-| `quote://changed` | `{ speaker, lines[], tone }` | 换语料时 |
-| `question://changed` | `{ index, total, question }` | 抽题/换题时 |
 | `notice://toast` | `{ level, text }` | 按需（如"钩子已重装"） |
 
 前端只渲染，不派生：例如"是否该显示冷却语"由 Rust 推送的 `state` 决定，前端不写 `if (elapsed > x)`。
@@ -353,7 +354,9 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 | `E_OVERLAY_FAILED` | 主屏窗口创建失败 | 同上 |
 | `E_BANK_INVALID` | 题库解析失败且无内嵌回退 | 禁止入关 |
 | `E_STATE_ILLEGAL` | 非法状态调用（含长按不足 8 s 就请求紧急通道） | 前端静默刷新 `get_state` |
-| `E_INVALID_CHOICE` | `choice` 越界或题目已失效 | 前端丢弃本次点击、重取当前题 |
+| `E_REMAIN_TOO_SHORT` | 剩余时间不足一次冷却（F-4.5） | 对话框显示"距出关不足一次冷却，请稍候到点。"并保持 `Locked` |
+| `E_CONFIRM_MISMATCH` | 破戒抄写句不一致（F-6.2） | 输入框标红，不消耗成本 |
+| `E_INVALID_CHOICE` | `choice` 越界或题号已失效 | 前端丢弃本次点击、以 `state://changed` 的 `payload` 为准 |
 | `E_BRIGHTNESS_FAILED` | 亮度调整/还原失败 | 仅在设置页提示，不打断 |
 | `E_STORE_FAILED` | 落盘失败 | 顶部横幅「记录未能保存」 |
 
@@ -376,7 +379,7 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 
 ## 6. 状态机实现
 
-PRD §5 的状态与转移表**原样迁入**，此处只补实现约定（M2 已落地前四条）：
+PRD §5 的状态与转移表**原样迁入**，此处只补实现约定（M4 已落地八态与下列全部条目）：
 
 1. **单一入口**：所有转移必须经过 `session::transition(event, elapsed_ms)`，函数内部校验合法性；非法转移返回 `E_STATE_ILLEGAL` 并记日志。
    - **起势两段式**：`Start` 只把状态推到 `Arming`（记录 `startedAtMs` 与 `armed_at_mono_ms`），3 秒后由 tick 线程发 `ArmFinished` 才进 `Locked` 并创建计时器；`Cancel` 只在 `Arming` 合法（F-2.2）。
@@ -392,8 +395,11 @@ PRD §5 的状态与转移表**原样迁入**，此处只补实现约定（M2 �
    7. 投递 `IoJob::ClearSnapshot` 删除 `session.json`。
 
    **禁止在分支里各写一套清理逻辑**（这是这类软件"漏还原导致系统状态残留"的常见来源）。
-3. **状态与投影分离**：`Locked/Cool/Challenge/Copying/Confirming` 五种状态共用同一个全屏窗口与同一个 `Lock.vue`，仅 `payload` 不同。切换状态不重建窗口。
+3. **状态与投影分离**：`Locked/Cool/Challenge/Copying/Confirming` 五种状态共用同一个全屏窗口与同一个 `Lock.vue`，仅 `payload` 不同。切换状态不重建窗口。投影只在 `runtime::publish` 一处构造，五个分支不得各写一套。
 4. **到点是状态机的最高优先级**：`session::transition()` 在查表之前先判 `remaining <= 0`，命中则强制 `Settled(completed)`，不论当前处于哪个状态。这条规则只能有一处实现，不得在 `Cool` / `Challenge` 分支里各写一遍。
+5. **成本参数随会话固化**：`cooldownBase` / `questionBase` 在 `Start` 时从 `config.json` 带入 `SessionInfo`，状态机因此不读文件；中途改配置不影响本次闭关。
+6. **冷却用单调 elapsed 计时**：`cool_end_elapsed_ms` 与 `elapsed_ms` 同一坐标系，改系统时间不能缩短冷却。`session.json` 的 `cooldownUntilMs` 只是换算出来的展示值，不参与判定。
+7. **题与答案只在 Rust**：抽题、选项打乱、判定都在 Rust；`state://changed` 的 `challenge` 载荷没有 `answer` 字段，`questionId` 只用于拒绝陈旧点击。
 
 ---
 
@@ -429,6 +435,8 @@ PRD §5 的状态与转移表**原样迁入**，此处只补实现约定（M2 �
 | 统计 | 有效日门槛 25 分钟、当日多次累加；**23:50 开始 30 分钟归属 `startedAtMs` 当日**；`accident`/`interrupted` 计入累计但不计有效日；`emergency` 两者都不计；断签后显示 0 |
 | 状态机 | PRD §5.2 每条转移 + 每条非法转移；**`Cool`/`Challenge`/`Copying`/`Confirming` 中 `remaining≤0` 一律进 `Settled(completed)`**；`attempts` 单调递增、答错不清零 |
 | 存储 | 原子写断电模拟（写 tmp 后不 rename 应读旧值）；JSON 损坏行跳过；`teardown` 先停 io 队列再删快照（无"删后又被写回"）；`config`/`records` 版本迁移与未知字段保留 |
+
+**当前规模（2026-10-21）**：`cargo test` 123 条、`vitest` 17 条。M4 新增的覆盖点：成本公式 8 条（含基数钳制与 `attempt=0`）、题库 6 条（内嵌合法性、坏文件回退、同轮不重复、种子可复现）、问阵 8 条（打乱保答案、错题不推进、越界、载荷无 `answer`）、抄写 7 条（少字/多字/错字/半角标点）、状态机 24 条（含五态到点与全部非法转移）。
 
 ### 8.2 只能手工（必须附截图/勾选表，标注"需要你确认"）
 
