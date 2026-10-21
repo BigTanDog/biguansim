@@ -60,6 +60,7 @@ fn start_locked(machine: &mut SessionMachine, minutes: u64) {
                 question_base: 3,
                 // 仿真按正式版口径（不缩放），断言里的 5/10/15 分钟才对得上
                 cost_scale: 1,
+                speaker: "长老".to_string(),
             },
             0,
         )

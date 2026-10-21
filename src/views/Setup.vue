@@ -63,7 +63,7 @@ function pick(preset: number): void {
       </button>
       <button class="nav__item" type="button" @click="store.openSettings()">
         <span class="nav__label">设置</span>
-        <span class="nav__value">主题 / 成本 / 关于</span>
+        <span class="nav__value">偏好设置</span>
       </button>
     </nav>
 
@@ -191,7 +191,10 @@ function pick(preset: number): void {
 }
 
 .nav__value {
+  overflow: hidden;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card {

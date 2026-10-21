@@ -33,6 +33,82 @@
   box-sizing: border-box;
 }
 
+/*
+ * 滚动条：WebView2 是 Chromium，默认滚动条会露出系统白灰配色，
+ * 在暗金界面上非常突兀（2026-10-21 截图反馈）。这里统一压成 8px 细条：
+ * 轨道透明、滑块半透明描金，hover 才加深一档。
+ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(201, 162, 39, 0.22);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(201, 162, 39, 0.4);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:root[data-theme='light'] ::-webkit-scrollbar-thumb {
+  background: rgba(44, 38, 32, 0.18);
+}
+
+:root[data-theme='light'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(44, 38, 32, 0.32);
+}
+
+/* 键盘可达性：只用 outline，不挤布局（TDD §5.4 只禁鼠标选中，不禁焦点） */
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 数字输入框的上下箭头在暗色下几乎看不见，也容易误触，直接隐藏 */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+/* 滑块：默认那套蓝白配色在暗金里完全出戏，改成细槽 + 描金圆钮 */
+input[type='range'] {
+  height: 16px;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(201, 162, 39, 0.28);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  appearance: none;
+  background: var(--bg);
+}
+
+input[type='range']:hover::-webkit-slider-thumb {
+  background: var(--accent);
+}
+
 html,
 body,
 #app {

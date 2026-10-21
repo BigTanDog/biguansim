@@ -46,6 +46,7 @@ pub fn publish_state(app: &AppHandle, runtime: &Arc<Runtime>) {
             elapsed_ms: elapsed as i64,
             target_ms: session.target_ms as i64,
             payload,
+            speaker: Some(session.speaker.clone()),
         },
     );
 }

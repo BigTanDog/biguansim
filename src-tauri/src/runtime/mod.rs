@@ -510,7 +510,9 @@ fn step_arming(app: &AppHandle, runtime: &Arc<Runtime>) {
     let snapshot = build_snapshot(runtime, 0);
     let _ = runtime.io_tx.send(IoJob::Snapshot(snapshot));
 
-    let goal = session_of(runtime).and_then(|session| session.goal);
+    let session = session_of(runtime);
+    let goal = session.as_ref().and_then(|item| item.goal.clone());
+    let speaker = session.as_ref().map(|item| item.speaker.clone());
 
     let _ = app.emit(
         "state://changed",
@@ -521,6 +523,7 @@ fn step_arming(app: &AppHandle, runtime: &Arc<Runtime>) {
             elapsed_ms: 0,
             target_ms: target_ms as i64,
             payload: None,
+            speaker,
         },
     );
 

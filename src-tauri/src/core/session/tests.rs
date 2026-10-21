@@ -24,6 +24,7 @@ fn start(machine: &mut SessionMachine, duration_ms: u64) {
                 question_base: 3,
                 // 单测按正式版口径（不缩放冷却），否则断言的 5/10/15 分钟都会变
                 cost_scale: 1,
+                speaker: "长老".to_string(),
             },
             0,
         )
@@ -153,6 +154,7 @@ fn start_while_arming_is_illegal() {
                 cooldown_base: 5,
                 question_base: 3,
                 cost_scale: 1,
+                speaker: "长老".to_string(),
             },
             0,
         )
@@ -177,6 +179,7 @@ fn start_while_locked_is_illegal() {
                 cooldown_base: 5,
                 question_base: 3,
                 cost_scale: 1,
+                speaker: "长老".to_string(),
             },
             0,
         )
@@ -202,6 +205,7 @@ fn start_while_cool_is_illegal() {
                 cooldown_base: 5,
                 question_base: 3,
                 cost_scale: 1,
+                speaker: "长老".to_string(),
             },
             0,
         )

@@ -79,6 +79,8 @@ pub struct SessionInfo {
     /// 冷却缩放：正式版 1，测试版 10（5 分钟 → 30 秒）。
     /// 只影响冷却时长，不影响题数/抄写字数——为了让自测能在一个短会话里走到第 3 轮。
     pub cost_scale: u32,
+    /// 本次闭关的说话人（阵灵/前辈/冥冥之中的声音/长老，入关时随机）
+    pub speaker: String,
     /// 冷却结束时的 `elapsed` 读数。用单调口径而不是墙钟：改系统时间不能缩短冷却。
     pub cool_end_elapsed_ms: Option<u64>,
     /// 本轮冷却的总时长（已缩放），投影直接用它，避免前端自己算
@@ -124,6 +126,7 @@ pub enum SessionEvent {
         cooldown_base: u32,
         question_base: u32,
         cost_scale: u32,
+        speaker: String,
     },
     /// Arming → Locked（3 秒走完）
     ArmFinished,
@@ -254,6 +257,7 @@ impl SessionMachine {
                 cooldown_base,
                 question_base,
                 cost_scale,
+                speaker,
             } => {
                 if self.state.is_active() || self.state == SessionState::Arming {
                     return Err(SessionError::StateIllegal);
@@ -272,6 +276,7 @@ impl SessionMachine {
                     cooldown_base,
                     question_base,
                     cost_scale: cost_scale.max(1),
+                    speaker,
                     cool_end_elapsed_ms: None,
                     cool_ms: 0,
                     round: None,

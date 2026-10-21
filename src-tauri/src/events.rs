@@ -48,6 +48,8 @@ pub struct StateChanged {
     pub elapsed_ms: i64,
     pub target_ms: i64,
     pub payload: Option<PhasePayload>,
+    /// 本次闭关的说话人（入关时随机）；冷却态固定为「看守弟子」，由界面覆盖
+    pub speaker: Option<String>,
 }
 
 #[derive(Clone, Serialize)]

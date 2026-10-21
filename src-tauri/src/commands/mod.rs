@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::app_state::AppState;
 use crate::core::bank::Bank;
+use crate::core::rng::Rng;
 use crate::core::session::{Outcome, SessionEvent, SessionState};
 use crate::core::store::Config;
 use crate::core::timer::{MonotonicClock, WallClock};
@@ -22,6 +23,36 @@ const MIN_DURATION_MIN: u32 = 10;
 const MAX_DURATION_MIN: u32 = 480;
 /// 入关的题库下限：少于这个数，单轮的蒙对率会从 1/64 跳到 1/16（F-5.2）
 const MIN_QUESTIONS: usize = 3;
+
+/// 说话人候选：每关随机一个，避免每次都像同一个人在同一处念同一套台词。
+/// 「看守弟子」不在此列——冷却时固定由他去通报长老（F-4.3）。
+const SPEAKERS: [&str; 4] = ["长老", "阵灵", "前辈", "冥冥之中的声音"];
+
+fn pick_speaker() -> String {
+    let mut rng = Rng::from_entropy();
+    let index = rng.below(SPEAKERS.len() as u32) as usize;
+    SPEAKERS.get(index).copied().unwrap_or("长老").to_string()
+}
+
+/// (题库总数, 当前可抽数)。可抽 = 不在记忆衰减冷却里的题（F-1.2 要求分开显示）。
+fn bank_counts(runtime: &Arc<Runtime>) -> (usize, usize) {
+    let Ok(bank) = runtime.bank.lock() else {
+        return (0, 0);
+    };
+
+    let total = bank.len();
+    let now_ms = SystemWall.wall_ms();
+    let drawable = match runtime.stats.lock() {
+        Ok(table) => bank
+            .questions
+            .iter()
+            .filter(|question| !table.is_cooling(&question.id, now_ms))
+            .count(),
+        Err(_) => total,
+    };
+
+    (total, drawable)
+}
 /// 测试版把冷却缩到这个倍数（5 分钟 → 30 秒），否则自测要走完
 /// 5+10+15 分钟的冷却才能到第 3 轮抄写，一次验证半小时。
 /// 正式版恒为 1（这个常量只在 debug 编译里被用到）。
@@ -85,6 +116,9 @@ pub struct StateView {
     clock_skew_min: i64,
     /// 活跃态投影（冷却/问阵/抄写/确认）；其余状态为 None
     payload: Option<PhasePayload>,
+    speaker: Option<String>,
+    bank_total: usize,
+    bank_drawable: usize,
 }
 
 #[tauri::command]
@@ -97,29 +131,19 @@ pub fn bootstrap(runtime: State<'_, Arc<Runtime>>) -> BootstrapView {
         })
     });
 
+    let (total, drawable) = bank_counts(&runtime);
     let bank = match runtime.bank.lock() {
-        Ok(bank) => {
-            let now_ms = SystemWall.wall_ms();
-            let drawable = match runtime.stats.lock() {
-                Ok(table) => bank
-                    .questions
-                    .iter()
-                    .filter(|question| !table.is_cooling(&question.id, now_ms))
-                    .count(),
-                Err(_) => bank.len(),
-            };
-            BankView {
-                id: bank.id.clone(),
-                name: bank.name.clone(),
-                total: bank.len(),
-                drawable,
-            }
-        }
+        Ok(bank) => BankView {
+            id: bank.id.clone(),
+            name: bank.name.clone(),
+            total,
+            drawable,
+        },
         Err(_) => BankView {
             id: "basic".to_string(),
             name: "基础阵法".to_string(),
-            total: 0,
-            drawable: 0,
+            total,
+            drawable,
         },
     };
 
@@ -149,6 +173,9 @@ pub fn start_session(
     let now_ms = SystemWall.wall_ms();
     let now_mono_ms = SystemMonotonic.unbiased_ms();
     let bank = bank_id.unwrap_or_else(|| "basic".to_string());
+    // 每关换一个说话人（阵灵/前辈/冥冥之中的声音/长老），避免台词永远出自同一张嘴
+    let speaker = pick_speaker();
+    let speaker_label = speaker.clone();
     // 成本基数在入关时固化进会话：状态机因此不必读文件，也不会中途被改配置影响
     let mut config = runtime.store.load_config();
 
@@ -187,6 +214,7 @@ pub fn start_session(
                 cooldown_base: config.cooldown_base,
                 question_base: config.question_base,
                 cost_scale: COST_SCALE,
+                speaker,
             },
             0,
         ) {
@@ -234,6 +262,7 @@ pub fn start_session(
             elapsed_ms: 0,
             target_ms: target_ms as i64,
             payload: None,
+            speaker: Some(speaker_label),
         },
     );
 
@@ -284,6 +313,7 @@ pub fn cancel_arming(
             elapsed_ms: 0,
             target_ms: 0,
             payload: None,
+            speaker: None,
         },
     );
 
@@ -326,6 +356,9 @@ pub fn get_state(runtime: State<'_, Arc<Runtime>>) -> StateView {
         attempts: session.as_ref().map(|s| s.attempts).unwrap_or(0),
         clock_skew_min: skew,
         payload: current_payload(&runtime),
+        speaker: session.as_ref().map(|item| item.speaker.clone()),
+        bank_total: bank_counts(&runtime).0,
+        bank_drawable: bank_counts(&runtime).1,
     }
 }
 
@@ -361,6 +394,7 @@ pub fn dev_abort(
             elapsed_ms: 0,
             target_ms: 0,
             payload: None,
+            speaker: None,
         },
     );
 

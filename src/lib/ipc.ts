@@ -110,6 +110,9 @@ export interface StateView {
   attempts: number
   clockSkewMin: number
   payload: PhasePayload | null
+  speaker: string | null
+  bankTotal: number
+  bankDrawable: number
 }
 
 export interface TimerTick {
@@ -125,6 +128,7 @@ export interface StateChanged {
   elapsedMs: number
   targetMs: number
   payload: PhasePayload | null
+  speaker: string | null
 }
 
 /** 起势倒计时：时间由 Rust 的 tick 线程给出 */

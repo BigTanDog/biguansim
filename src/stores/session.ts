@@ -25,8 +25,17 @@ const ERROR_TEXT: Record<string, string> = {
 
 export function errorText(err: unknown): string {
   const raw = String(err)
-  const code = raw.split(':')[0]?.trim() ?? raw
-  return ERROR_TEXT[code] ?? raw
+  const [head, ...rest] = raw.split(':')
+  const code = head?.trim() ?? raw
+  const detail = rest.join(':').trim()
+
+  const mapped = ERROR_TEXT[code]
+  if (!mapped) {
+    return raw
+  }
+  // Rust 有时会在错误码后面补具体原因（如"题库至少需要 3 题，当前 2 题"），
+  // 直接吞掉会让人看不出到底哪不对，所以把它接在固定文案后面。
+  return detail ? `${mapped}（${detail}）` : mapped
 }
 
 export const useSessionStore = defineStore('session', () => {
@@ -49,6 +58,8 @@ export const useSessionStore = defineStore('session', () => {
   const armingRemainingMs = ref(0)
   const clockSkewMin = ref(0)
   const goal = ref<string | null>(null)
+  /** 本次闭关的说话人（阵灵/前辈/冥冥之中的声音/长老）：由 Rust 在入关时随机 */
+  const speaker = ref<string | null>(null)
   const bank = ref('basic')
   const bankName = ref('基础阵法')
   const bankTotal = ref(0)
@@ -126,6 +137,9 @@ export const useSessionStore = defineStore('session', () => {
     goal.value = view.goal
     bank.value = view.bank
     payload.value = view.payload
+    speaker.value = view.speaker
+    bankTotal.value = view.bankTotal
+    bankDrawable.value = view.bankDrawable
     if (view.payload?.kind === 'cool') {
       coolRemainMs.value = view.payload.remainMs
     }
@@ -180,6 +194,7 @@ export const useSessionStore = defineStore('session', () => {
 
       await ipc.onStateChanged((changed) => {
         payload.value = changed.payload
+        speaker.value = changed.speaker
         switch (changed.state) {
           case 'Arming':
             setState('Arming')
@@ -338,6 +353,9 @@ export const useSessionStore = defineStore('session', () => {
     try {
       const page = await ipc.listRecords(1)
       stats.value = page.stats
+      // 可抽题数会随答题变化，顺手同步一次（否则配置页的数字会停在启动那一刻）
+      const boot = await ipc.getState()
+      applyState(boot)
     } catch (err) {
       lastError.value = String(err)
     }
@@ -414,6 +432,7 @@ export const useSessionStore = defineStore('session', () => {
     armingRemainingMs,
     clockSkewMin,
     goal,
+    speaker,
     bank,
     bankName,
     bankTotal,

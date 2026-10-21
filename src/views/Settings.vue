@@ -107,6 +107,8 @@ async function openDir(): Promise<void> {
       </div>
       <p class="row__note">
         第 n 次尝试的冷却是 基数 × n（封顶 20 分钟），题数是 基数 + (n−1)（封顶 5 题）。
+        <br />
+        这两项在入关时固化：改动从下一关开始生效，正在闭关的那一关不受影响。
       </p>
     </section>
 

@@ -90,6 +90,7 @@ pub fn finish(
             elapsed_ms: session.elapsed_ms as i64,
             target_ms: session.target_ms as i64,
             payload: None,
+            speaker: Some(session.speaker.clone()),
         },
     );
 

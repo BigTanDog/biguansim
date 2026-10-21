@@ -135,10 +135,12 @@ const clockLabel = computed(() => formatClockLabel(now.value, store.clockSkewMin
 const clockSuspect = computed(() => Math.abs(store.clockSkewMin) > SKEW_THRESHOLD_MIN)
 
 /**
- * 「正在通知长老，请稍候。」是**看守弟子**去通报，不是长老自己说自己。
- * 其余场景（叙述/问阵/抄写/破戒确认）都是长老在讲。
+ * 说话人：
+ * - 冷却时是**看守弟子**去通报（「长老自己通知自己」不成立）；
+ * - 其余场景用本次闭关随机到的那位（阵灵/前辈/冥冥之中的声音/长老），
+ *   由 Rust 在入关时选定并随投影下发——每关换一张嘴，台词不至于永远是同一个人。
  */
-const speaker = computed(() => (store.state === 'Cool' ? '看守弟子' : '长老'))
+const speaker = computed(() => (store.state === 'Cool' ? '看守弟子' : (store.speaker ?? '长老')))
 
 const exitPayload = computed(() =>
   store.payload && (store.payload.kind === 'cool' || store.payload.kind === 'challenge')
