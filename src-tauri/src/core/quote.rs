@@ -223,7 +223,8 @@ mod tests {
     /// 用全角/半角造成的无效挫败是最伤体验的一种失败。
     #[test]
     fn copy_texts_are_chinese_only() {
-        const PUNCT: &str = "。，、；：？！“”‘’（）《》「」";
+        // 破折号「——」也是中文标点，抄写里允许
+        const PUNCT: &str = "。，、；：？！“”‘’（）《》「」—";
         let book = book();
         for text in &book.file.copy {
             let bad: Vec<char> = text

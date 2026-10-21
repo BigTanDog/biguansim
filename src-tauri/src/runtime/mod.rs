@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::core::bank::Bank;
+use crate::core::bank_stats::Table as BankStats;
 use crate::core::challenge::Round;
 use crate::core::cost;
 use crate::core::quote::QuoteBook;
@@ -64,6 +65,8 @@ pub struct Runtime {
     pub recovered: Mutex<Option<RecoveredInfo>>,
     /// 题库：只在入关与抽题时读，不进 `SessionInfo`（后者每 250 ms 被 clone）
     pub bank: Mutex<Arc<Bank>>,
+    /// 记忆衰减统计（`bank/stats.json`）。抽题时读，答题后改并交给 io 线程落盘。
+    pub stats: Mutex<BankStats>,
     pub quotes: Arc<QuoteBook>,
 }
 
@@ -78,6 +81,7 @@ pub fn init(app: &AppHandle) -> Arc<Runtime> {
 
     let recovered = recover_previous(&store);
     let bank = Bank::load(store.root());
+    let stats = BankStats::load(store.root());
     let quotes = QuoteBook::load(store.root());
     ::log::info!(
         "[bank] 已加载题库 {} 题；语料抄写段 {} 段",
@@ -94,6 +98,7 @@ pub fn init(app: &AppHandle) -> Arc<Runtime> {
         io_tx,
         recovered: Mutex::new(recovered),
         bank: Mutex::new(Arc::new(bank)),
+        stats: Mutex::new(stats),
         quotes: Arc::new(quotes),
     });
 
@@ -294,35 +299,43 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
             }
 
             // 2) 状态专属心跳
+            //
+            // Esc 的计时在任何活跃态都读一次，但只有 Locked 才允许触发破戒
+            // （F-6.1；冷却/问阵里开这个口子等于绕过冷却，违反 F-4.1）。
+            // 诊断日志也照所有状态打，因为"按了没反应"必须能区分是
+            // "钩子没收到键"还是"收到了但当时不在 Locked"——2026-10-21 那两轮
+            // 就是因为只在 Locked 里打日志，完全看不出他按的时候是什么状态。
+            let esc_held = hook::esc_hold_ms();
+            if !esc_logged && esc_held >= 1_000 {
+                ::log::info!(
+                    "[esc] 已按住 {esc_held} ms（状态 {}，门槛 {ESC_HOLD_TRIGGER_MS} ms）",
+                    state.as_str()
+                );
+                esc_logged = true;
+            }
+            if esc_held == 0 {
+                esc_logged = false;
+            }
+
             if state == SessionState::Locked {
-                let held = hook::esc_hold_ms();
-                if held > 0 || last_esc_hold > 0 {
+                if esc_held > 0 || last_esc_hold > 0 {
                     let _ = app.emit(
                         "esc://hold",
                         EscHold {
-                            held_ms: held as i64,
+                            held_ms: esc_held as i64,
                         },
                     );
                 }
-                // 诊断：有这一行说明钩子侧正常收到了 Esc，只是还没到 8 秒；
-                // 完全没有这一行则说明 Esc 根本没进钩子（或当时不在 Locked）
-                if !esc_logged && held >= 2_000 {
-                    ::log::info!("[esc] 已按住 {held} ms（门槛 {ESC_HOLD_TRIGGER_MS} ms）");
-                    esc_logged = true;
-                }
-                if held == 0 {
-                    esc_logged = false;
-                }
-                last_esc_hold = held;
+                last_esc_hold = esc_held;
 
-                if held >= ESC_HOLD_TRIGGER_MS {
+                if esc_held >= ESC_HOLD_TRIGGER_MS {
                     // 8 秒判定在 Rust：前端卡住也破得了戒（M4 计划 D-27）
                     let outcome = transition(&runtime, SessionEvent::RequestEmergency, elapsed);
                     hook::esc_consume();
                     last_esc_hold = 0;
                     if matches!(outcome, Ok(Outcome::Confirming)) {
                         publish_state(&app, &runtime);
-                        ::log::info!("[tick] Esc 按住 {held} ms，进入破戒确认");
+                        ::log::info!("[tick] Esc 按住 {esc_held} ms，进入破戒确认");
                     }
                 }
             } else {
@@ -403,7 +416,14 @@ fn begin_challenge(
     };
 
     let mut rng = Rng::from_entropy();
-    let drawn = bank.draw(needed as usize, &mut rng);
+    // 记忆衰减用墙钟毫秒（与 `lastAskedMs` 同口径），不掺单调时钟
+    let now_ms = SystemWall.wall_ms();
+    let table = runtime
+        .stats
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    let drawn = bank.draw_with(&table, needed as usize, now_ms, &mut rng);
     if drawn.is_empty() {
         ::log::error!("[bank] 抽不到题（题库为空），保持冷却等待重试");
         let should_warn = last_warn.map_or(true, |at| at.elapsed() >= Duration::from_secs(10));

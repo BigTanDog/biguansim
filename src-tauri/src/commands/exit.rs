@@ -14,7 +14,27 @@ use tauri::{AppHandle, State};
 use crate::core::copy::CopyTask;
 use crate::core::rng::Rng;
 use crate::core::session::{Outcome, SessionError, SessionEvent};
+use crate::core::timer::WallClock;
+use crate::io_queue::IoJob;
+use crate::platform::time::SystemWall;
 use crate::runtime::{finish, publish_state, read_timer, Runtime};
+
+/// 记一次作答到记忆衰减表，并把整表交给 io 线程落盘。
+/// 命令线程只改内存（持锁几微秒），写盘一律走队列（AGENTS §6 的 IO 归属）。
+fn record_answer(runtime: &Arc<Runtime>, question_id: &str, correct: bool) {
+    let now_ms = SystemWall.wall_ms();
+    let snapshot = {
+        let Ok(mut table) = runtime.stats.lock() else {
+            return;
+        };
+        table.mark(question_id, now_ms, correct);
+        table.clone()
+    };
+
+    if runtime.io_tx.send(IoJob::BankStats(snapshot)).is_err() {
+        ::log::error!("[io] 统计入队失败（io 线程已退出）");
+    }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,6 +178,7 @@ pub fn submit_choice(
 
     match outcome {
         Ok(Outcome::ChallengeAdvanced) => {
+            record_answer(&runtime, &question_id, true);
             publish_state(&app, &runtime);
             Ok(ChoiceView {
                 accepted: true,
@@ -168,10 +189,11 @@ pub fn submit_choice(
             attempt,
             cooldown_ms,
         }) => {
+            record_answer(&runtime, &question_id, false);
             publish_state(&app, &runtime);
             ::log::info!(
-                "[exit] 答错：第 {attempt} 次，冷却 {} 分钟",
-                cooldown_ms / 60_000
+                "[exit] 答错：第 {attempt} 次，冷却 {} 秒",
+                cooldown_ms / 1_000
             );
             Ok(ChoiceView {
                 accepted: true,
@@ -179,6 +201,7 @@ pub fn submit_choice(
             })
         }
         Ok(Outcome::Copying { target_chars }) => {
+            record_answer(&runtime, &question_id, true);
             publish_state(&app, &runtime);
             ::log::info!("[exit] 全对，进入抄写（{target_chars} 字）");
             Ok(ChoiceView {
@@ -187,6 +210,7 @@ pub fn submit_choice(
             })
         }
         Ok(Outcome::Settled { result, session }) => {
+            record_answer(&runtime, &question_id, true);
             finish(&app, &runtime, result, &session);
             Ok(ChoiceView {
                 accepted: true,

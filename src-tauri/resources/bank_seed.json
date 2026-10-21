@@ -10,8 +10,8 @@
       "tags": ["math"],
       "source": "generated",
       "stem": "∫₀¹ x² dx 的值是？",
-      "options": ["1/4", "1/3", "1/2", "1"],
-      "answer": 1,
+      "options": ["1/3", "1/4", "1/2", "1"],
+      "answer": 0,
       "hint": "幂函数积分公式"
     },
     {
@@ -20,9 +20,9 @@
       "difficulty": "undergrad",
       "tags": ["math"],
       "source": "generated",
-      "stem": "A 为 3×3 可逆矩阵，det(A⁻¹) 等于？",
-      "options": ["det(A)", "−det(A)", "1/det(A)", "det(A)²"],
-      "answer": 2,
+      "stem": "A 为可逆矩阵，det(A⁻¹) 等于？",
+      "options": ["−det(A)", "1/det(A)", "det(A)", "det(A)²"],
+      "answer": 1,
       "hint": "逆矩阵行列式与原行列式互为倒数"
     },
     {
@@ -32,8 +32,8 @@
       "tags": ["math"],
       "source": "generated",
       "stem": "lim(x→0) sin x / x 等于？",
-      "options": ["0", "∞", "不存在", "1"],
-      "answer": 3,
+      "options": ["0", "∞", "1", "不存在"],
+      "answer": 2,
       "hint": "重要极限"
     },
     {
@@ -43,23 +43,78 @@
       "tags": ["math"],
       "source": "generated",
       "stem": "A、B 相互独立，P(A)=0.3、P(B)=0.4，则 P(A∩B)=？",
-      "options": ["0.12", "0.7", "0.58", "0.1"],
-      "answer": 0,
+      "options": ["0.7", "0.58", "0.1", "0.12"],
+      "answer": 3,
       "hint": "独立事件交集的概率等于概率之积"
     },
     {
       "id": "q005",
       "type": "choice",
       "difficulty": "undergrad",
-      "tags": ["english"],
+      "tags": ["math"],
       "source": "generated",
-      "stem": "The committee ___ reached a decision.",
-      "options": ["have", "has", "having", "to have"],
-      "answer": 1,
-      "hint": "主谓一致：committee 作整体时为单数"
+      "stem": "2×2 矩阵的两个特征值为 2 与 3，其行列式等于？",
+      "options": ["6", "5", "1", "2"],
+      "answer": 0,
+      "hint": "行列式等于特征值之积"
     },
     {
       "id": "q006",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["math"],
+      "source": "generated",
+      "stem": "d/dx ln x 等于？",
+      "options": ["x", "1/x", "e^x", "ln x"],
+      "answer": 1,
+      "hint": "自然对数求导"
+    },
+    {
+      "id": "q007",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["math"],
+      "source": "generated",
+      "stem": "Σ(n=1→∞) 1/2ⁿ 等于？",
+      "options": ["1/2", "发散", "1", "2"],
+      "answer": 2,
+      "hint": "等比级数求和"
+    },
+    {
+      "id": "q008",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["math"],
+      "source": "generated",
+      "stem": "f(x)=x³，则 f'(1) 等于？",
+      "options": ["0", "1", "2", "3"],
+      "answer": 3,
+      "hint": "幂函数求导"
+    },
+    {
+      "id": "q009",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["math"],
+      "source": "generated",
+      "stem": "标准正态分布 N(0,1) 的数学期望是？",
+      "options": ["0", "1", "σ", "不存在"],
+      "answer": 0,
+      "hint": "正态分布的对称性"
+    },
+    {
+      "id": "q010",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["math"],
+      "source": "generated",
+      "stem": "向量 (1,2) 与 (2,4) 的关系是？",
+      "options": ["垂直", "平行", "相等", "无确定关系"],
+      "answer": 1,
+      "hint": "成比例即共线"
+    },
+    {
+      "id": "q011",
       "type": "choice",
       "difficulty": "undergrad",
       "tags": ["english"],
@@ -70,7 +125,7 @@
       "hint": "该词表示“无处不在”"
     },
     {
-      "id": "q007",
+      "id": "q012",
       "type": "choice",
       "difficulty": "undergrad",
       "tags": ["english"],
@@ -81,18 +136,95 @@
       "hint": "与过去事实相反的虚拟语气"
     },
     {
-      "id": "q008",
+      "id": "q013",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "The committee ___ reached a decision.",
+      "options": ["has", "have", "having", "to have"],
+      "answer": 0,
+      "hint": "committee 作整体时为单数"
+    },
+    {
+      "id": "q014",
       "type": "choice",
       "difficulty": "undergrad",
       "tags": ["english"],
       "source": "generated",
       "stem": "与 meticulous 意思最接近的是？",
-      "options": ["thorough", "careless", "hasty", "vague"],
-      "answer": 0,
-      "hint": "该词强调一丝不苟"
+      "options": ["careless", "thorough", "hasty", "vague"],
+      "answer": 1,
+      "hint": "强调一丝不苟"
     },
     {
-      "id": "q009",
+      "id": "q015",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "She is used to ___ up early.",
+      "options": ["get", "got", "getting", "gets"],
+      "answer": 2,
+      "hint": "be used to 后接动名词"
+    },
+    {
+      "id": "q016",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "The report, ___ was published yesterday, is useful.",
+      "options": ["who", "whose", "whom", "which"],
+      "answer": 3,
+      "hint": "非限制性定语从句指物"
+    },
+    {
+      "id": "q017",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "与 ambiguous 意思最接近的是？",
+      "options": ["unclear", "obvious", "precise", "certain"],
+      "answer": 0,
+      "hint": "该词表示“含糊、可作多种解释”"
+    },
+    {
+      "id": "q018",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "Not until he left ___ the truth.",
+      "options": ["he knew", "did he know", "he did know", "knew he"],
+      "answer": 1,
+      "hint": "否定词置于句首引起部分倒装"
+    },
+    {
+      "id": "q019",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "与 concise 意思最接近的是？",
+      "options": ["lengthy", "vague", "brief", "complex"],
+      "answer": 2,
+      "hint": "该词表示“简明扼要”"
+    },
+    {
+      "id": "q020",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "If I ___ you, I would take the offer.",
+      "options": ["am", "be", "was", "were"],
+      "answer": 3,
+      "hint": "虚拟语气中 be 动词一律用 were"
+    },
+    {
+      "id": "q021",
       "type": "choice",
       "difficulty": "undergrad",
       "tags": ["cs"],
@@ -103,42 +235,108 @@
       "hint": "分治，且稳定"
     },
     {
-      "id": "q010",
+      "id": "q022",
       "type": "choice",
       "difficulty": "undergrad",
       "tags": ["cs"],
       "source": "generated",
       "stem": "TCP 三次握手的主要目的是？",
-      "options": ["加密传输内容", "压缩报文", "同步初始序列号并确认双方可达", "分配 IP 地址"],
-      "answer": 2,
+      "options": ["同步初始序列号并确认双方可达", "加密传输内容", "压缩报文", "分配 IP 地址"],
+      "answer": 0,
       "hint": "两次不够，四次多余"
     },
     {
-      "id": "q011",
+      "id": "q023",
       "type": "choice",
       "difficulty": "undergrad",
       "tags": ["cs"],
       "source": "generated",
       "stem": "进程与线程的主要区别是？",
       "options": [
-        "线程共享所属进程的地址空间",
         "线程有独立地址空间",
         "进程不能并发执行",
-        "线程不由内核调度"
+        "线程不由内核调度",
+        "线程共享所属进程的地址空间"
       ],
-      "answer": 0,
+      "answer": 3,
       "hint": "同一进程内的线程共享资源"
     },
     {
-      "id": "q012",
+      "id": "q024",
       "type": "choice",
       "difficulty": "undergrad",
       "tags": ["cs"],
       "source": "generated",
       "stem": "关系表中消除非主属性对候选键的部分依赖，要达到？",
-      "options": ["第一范式", "第二范式", "第三范式", "BCNF"],
-      "answer": 1,
+      "options": ["第一范式", "第三范式", "第二范式", "BCNF"],
+      "answer": 2,
       "hint": "部分依赖是第二范式要解决的问题"
+    },
+    {
+      "id": "q025",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "HTTP 状态码 404 表示？",
+      "options": ["服务器内部错误", "资源不存在", "请求成功", "需要认证"],
+      "answer": 1,
+      "hint": "Not Found"
+    },
+    {
+      "id": "q026",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "栈的基本特性是？",
+      "options": ["后进先出", "先进先出", "随机访问", "双端插入"],
+      "answer": 0,
+      "hint": "压栈与弹栈在同一端"
+    },
+    {
+      "id": "q027",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "哈希表在理想情况下的平均查找复杂度是？",
+      "options": ["O(n)", "O(log n)", "O(n log n)", "O(1)"],
+      "answer": 3,
+      "hint": "直接由键算地址"
+    },
+    {
+      "id": "q028",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "Git 中创建并切换到新分支的命令是？",
+      "options": ["git branch -d", "git merge", "git checkout -b", "git remote add"],
+      "answer": 2,
+      "hint": "-b 表示新建"
+    },
+    {
+      "id": "q029",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "关系数据库中主键的主要作用是？",
+      "options": ["加速排序", "唯一标识一行", "建立索引别名", "限制列数"],
+      "answer": 1,
+      "hint": "主键唯一且非空"
+    },
+    {
+      "id": "q030",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "下列哪一项不属于死锁的四个必要条件？",
+      "options": ["分页", "互斥", "循环等待", "不可剥夺"],
+      "answer": 0,
+      "hint": "四个条件是互斥、占有并等待、不可剥夺、循环等待"
     }
   ]
 }

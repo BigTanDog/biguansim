@@ -6,12 +6,16 @@
 
 use std::sync::mpsc::Receiver;
 
+use crate::core::bank_stats::Table;
 use crate::core::store::{SessionSnapshot, Store};
 
 pub enum IoJob {
     Snapshot(SessionSnapshot),
     /// 正常出关：入队保证排在所有快照之后，天然不会"删了又被写回"
     ClearSnapshot,
+    /// 答题后落 `bank/stats.json`（记忆衰减的唯一数据源）。
+    /// 传整表而不是增量：文件很小（30 题），整表写更简单也不会写歪。
+    BankStats(Table),
 }
 
 /// 消费队列直到发送端关闭（进程退出）。IO 线程只跑这一个循环。
@@ -26,6 +30,11 @@ pub fn run(store: &Store, rx: Receiver<IoJob>) {
             IoJob::ClearSnapshot => {
                 if let Err(err) = store.clear_session() {
                     ::log::error!("[io] 删除快照失败：{err}");
+                }
+            }
+            IoJob::BankStats(table) => {
+                if let Err(err) = table.save(store) {
+                    ::log::error!("[io] 写题库统计失败：{err}");
                 }
             }
         }

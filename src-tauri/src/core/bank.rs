@@ -103,14 +103,61 @@ impl Bank {
         self.questions.is_empty()
     }
 
-    /// 抽 `count` 道**互不重复**的题（F-5.3 的同轮不重复）。
-    /// 题少时有多少给多少；记忆衰减与三级退化在 M5 接进来，接口不变。
+    /// 抽 `count` 道**互不重复**的题（F-5.3 的同轮不重复），不看记忆衰减。
+    /// 测试与"无统计"场景用它；正式抽题走 `draw_with`。
     pub fn draw(&self, count: usize, rng: &mut Rng) -> Vec<Question> {
         let mut indices: Vec<usize> = (0..self.questions.len()).collect();
         rng.shuffle(&mut indices);
         indices
             .into_iter()
             .take(count.min(self.questions.len()))
+            .map(|index| self.questions[index].clone())
+            .collect()
+    }
+
+    /// 带记忆衰减的抽题（F-8.2）。
+    ///
+    /// 两级退化，**保证返回 `min(count, 题库总数)` 道题，绝不让 3 题变 2 题**
+    /// （2 题全对的蒙对率 1/16，会让"蒙不过去"的论证失效）：
+    /// 1. 冷却池（不在 30 天 / 30 分钟冷却里的题）内随机取；
+    /// 2. 不够时，把冷却中的题按 `lastAskedMs` 升序（从未问过的最前）补进来。
+    ///
+    /// 为什么只有两级：第 2 级本身不看冷却，所以 PRD F-8.2 的第三级"全库随机"
+    /// 永远不会触发；按"最久未出现"排序比随机更符合意图。
+    pub fn draw_with(
+        &self,
+        stats: &crate::core::bank_stats::Table,
+        count: usize,
+        now_ms: i64,
+        rng: &mut Rng,
+    ) -> Vec<Question> {
+        let count = count.min(self.questions.len());
+        if count == 0 {
+            return Vec::new();
+        }
+
+        let mut fresh: Vec<usize> = (0..self.questions.len())
+            .filter(|index| !stats.is_cooling(&self.questions[*index].id, now_ms))
+            .collect();
+        rng.shuffle(&mut fresh);
+
+        let take = fresh.len().min(count);
+        let mut chosen: Vec<usize> = fresh[..take].to_vec();
+
+        if chosen.len() < count {
+            let mut rest: Vec<usize> = (0..self.questions.len())
+                .filter(|index| !chosen.contains(index))
+                .collect();
+            rest.sort_by_key(|index| {
+                stats
+                    .last_asked_ms(&self.questions[*index].id)
+                    .unwrap_or(i64::MIN)
+            });
+            chosen.extend_from_slice(&rest[..count - chosen.len()]);
+        }
+
+        chosen
+            .into_iter()
             .map(|index| self.questions[index].clone())
             .collect()
     }
@@ -248,6 +295,101 @@ mod tests {
         assert_eq!(bank.id, "basic", "非法题库不得被采用");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---------- 记忆衰减与退化（S2） ----------
+
+    use crate::core::bank_stats::Table;
+
+    fn fixture(count: usize) -> Bank {
+        Bank {
+            id: "fixture".to_string(),
+            name: "夹具".to_string(),
+            questions: (0..count)
+                .map(|index| Question {
+                    id: format!("q{index}"),
+                    kind: "choice".to_string(),
+                    difficulty: "undergrad".to_string(),
+                    tags: Vec::new(),
+                    source: "generated".to_string(),
+                    stem: format!("第 {index} 题"),
+                    options: vec![
+                        "对".to_string(),
+                        "甲".to_string(),
+                        "乙".to_string(),
+                        "丙".to_string(),
+                    ],
+                    answer: 0,
+                    hint: None,
+                })
+                .collect(),
+        }
+    }
+
+    const NOW: i64 = 1_792_500_000_000;
+
+    #[test]
+    fn draw_with_skips_cooling_questions() {
+        let bank = fixture(6);
+        let mut stats = Table::default();
+        for index in 0..5 {
+            stats.mark(&format!("q{index}"), NOW, true);
+        }
+
+        let drawn = bank.draw_with(&stats, 3, NOW, &mut Rng::new(1));
+        let ids: Vec<&str> = drawn.iter().map(|q| q.id.as_str()).collect();
+
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&"q5"), "只有 q5 没在冷却，必须被抽中");
+    }
+
+    /// F-8.2 的退化：全部在冷却时仍要凑满（否则只能出 1 题甚至 0 题）
+    #[test]
+    fn draw_with_falls_back_when_everything_is_cooling() {
+        let bank = fixture(6);
+        let mut stats = Table::default();
+        for index in 0..6 {
+            stats.mark(&format!("q{index}"), NOW - index as i64 * 1_000, true);
+        }
+
+        let drawn = bank.draw_with(&stats, 5, NOW, &mut Rng::new(2));
+        assert_eq!(drawn.len(), 5, "冷却池为空时也必须凑满 5 题");
+
+        let ids: std::collections::HashSet<&str> = drawn.iter().map(|q| q.id.as_str()).collect();
+        assert_eq!(ids.len(), 5, "同轮不得重复");
+    }
+
+    /// 退化时优先"最久没出现过"的题：q0 是 6 天前，q5 是刚刚
+    #[test]
+    fn fallback_prefers_least_recently_asked() {
+        let bank = fixture(3);
+        let mut stats = Table::default();
+        stats.mark("q0", NOW - 6 * 24 * 60 * 60 * 1_000, true);
+        stats.mark("q1", NOW - 3 * 24 * 60 * 60 * 1_000, true);
+        stats.mark("q2", NOW, true);
+
+        let drawn = bank.draw_with(&stats, 2, NOW, &mut Rng::new(3));
+        let ids: Vec<&str> = drawn.iter().map(|q| q.id.as_str()).collect();
+        assert_eq!(ids, vec!["q0", "q1"], "应按最久未出现排序补齐");
+    }
+
+    #[test]
+    fn wrong_answer_returns_after_thirty_minutes() {
+        let bank = fixture(3);
+        let mut stats = Table::default();
+        stats.mark("q0", NOW, false);
+        stats.mark("q1", NOW, false);
+        stats.mark("q2", NOW, false);
+
+        let drawn = bank.draw_with(&stats, 3, NOW + 31 * 60 * 1_000, &mut Rng::new(4));
+        assert_eq!(drawn.len(), 3);
+    }
+
+    #[test]
+    fn draw_with_never_exceeds_bank_size() {
+        let bank = fixture(4);
+        let drawn = bank.draw_with(&Table::default(), 99, NOW, &mut Rng::new(5));
+        assert_eq!(drawn.len(), 4);
     }
 
     #[test]
