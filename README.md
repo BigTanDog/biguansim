@@ -28,6 +28,10 @@ pnpm tauri build      # 产出 src-tauri/target/release/biguansim.exe
 > 脚本里一次性调用时显式带上 `RUSTUP_HOME=D:\DevTools\rustup`、`CARGO_HOME=D:\DevTools\cargo`。
 > debug 版走 `devUrl`，需要 `pnpm dev` 或 `pnpm tauri dev` 配合；单独双击 debug exe 会显示"localhost 拒绝连接"。
 
+> **`src-tauri\target\release\biguansim.exe` 不会自动更新**：`target/` 不入库，改完代码必须重跑
+> `pnpm tauri build` 才会产出新 exe。判断手上这份是不是新的，看两处——文件时间，以及启动后
+> `%APPDATA%\闭关模拟器\logs\biguansim.log` 里有没有 `[bank] 已加载题库 …` 这一行（M4 起才有）。
+
 自动化检查（提交前必须全绿，逐条对应 AGENTS §1）：
 
 ```bash
