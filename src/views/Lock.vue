@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import ConfirmPanel from '../components/ConfirmPanel.vue'
 import CopyPanel from '../components/CopyPanel.vue'
@@ -77,6 +77,11 @@ function onEscKeydown(event: KeyboardEvent): void {
       // 触发后立刻收掉进度环：面板要接管注意力；手还按着也不该再压一层遮罩
       escLocalMs.value = 0
       ipc.requestEmergency().catch((err: unknown) => {
+        // 钩子那条路（Rust tick）可能已经先推进了状态，这里再调一次会被拒。
+        // 这不是错误，静默即可——否则面板还没开就先弹一行红字。
+        if (String(err).startsWith('E_STATE_ILLEGAL')) {
+          return
+        }
         store.notify('error', `破戒通道未能打开：${String(err)}`)
       })
     }
@@ -96,6 +101,17 @@ onMounted(() => {
   window.addEventListener('keydown', onEscKeydown)
   window.addEventListener('keyup', onEscKeyup)
 })
+
+// 一离开 Locked 就停表：否则面板已经打开，这里还在计时并再次 invoke
+watch(
+  () => store.state,
+  (next) => {
+    if (next !== 'Locked') {
+      stopEscTimer()
+      escLocalMs.value = 0
+    }
+  },
+)
 
 onUnmounted(() => {
   stopEscTimer()

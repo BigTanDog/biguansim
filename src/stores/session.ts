@@ -52,6 +52,8 @@ export const useSessionStore = defineStore('session', () => {
   const bank = ref('basic')
   const bankName = ref('基础阵法')
   const bankTotal = ref(0)
+  /** 可抽题数（总数 − 冷却中），F-1.2 要求与总数分开显示 */
+  const bankDrawable = ref(0)
   /** debug 构建标记：由 Rust 的 cfg!(debug_assertions) 告知（release 里恒为 false） */
   const debugBuild = ref(false)
   const result = ref<string | null>(null)
@@ -141,6 +143,7 @@ export const useSessionStore = defineStore('session', () => {
       bank.value = boot.bank.id || 'basic'
       bankName.value = boot.bank.name || '基础阵法'
       bankTotal.value = boot.bank.total
+      bankDrawable.value = boot.bank.drawable
       debugBuild.value = boot.debugBuild
       stats.value = boot.stats
       lastSession.value = boot.lastSession
@@ -414,6 +417,7 @@ export const useSessionStore = defineStore('session', () => {
     bank,
     bankName,
     bankTotal,
+    bankDrawable,
     debugBuild,
     result,
     lastSession,

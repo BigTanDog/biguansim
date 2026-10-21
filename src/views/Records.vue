@@ -72,9 +72,7 @@ function formatWhen(ms: number): string {
       </li>
     </ul>
 
-    <p v-else class="empty">
-      还没有记录。坐满一关之后，这里会留下它的时长与结果——也包括破戒与异常中断。
-    </p>
+    <p v-else class="empty">尚无闭关记录。第一次闭关，从 25 分钟开始。</p>
   </main>
 </template>
 

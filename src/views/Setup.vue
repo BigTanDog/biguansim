@@ -102,7 +102,7 @@ function pick(preset: number): void {
     <section class="card">
       <h2 class="card__title">阵法</h2>
       <p class="bank">
-        {{ store.bankName }} · 可抽 {{ store.bankTotal }} 题 / 共 {{ store.bankTotal }} 题
+        {{ store.bankName }} · 可抽 {{ store.bankDrawable }} 题 / 共 {{ store.bankTotal }} 题
       </p>
       <p v-if="thinBank" class="bank-warn">阵法简陋（共 {{ store.bankTotal }} 题），易被强破</p>
       <label class="custom">

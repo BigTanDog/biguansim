@@ -32,6 +32,9 @@ pnpm tauri build      # 产出 src-tauri/target/release/biguansim.exe
 > `pnpm tauri build` 才会产出新 exe。判断手上这份是不是新的，看两处——文件时间，以及启动后
 > `%APPDATA%\闭关模拟器\logs\biguansim.log` 里有没有 `[bank] 已加载题库 …` 这一行（M4 起才有）。
 
+> **交付前跑 `pnpm artifact`**（= `tauri build` + `tauri build --debug`）：它会按正确顺序把两个产物都重建一遍。
+> 只想要测试版时用 `pnpm artifact:test`。**不要**在它之后再跑 `cargo test`/`cargo build`。
+>
 > **`cargo build` / `cargo test` 会覆盖 `target\debug\biguansim.exe`，把它变成"要连 Vite"的版本**：
 > 只有 Tauri CLI（`tauri build` / `tauri build --debug`）会给 `tauri` crate 加 `custom-protocol`
 > feature，从而内嵌前端；裸 `cargo` 构建没有这个 feature，窗口会去连 `devUrl` 并显示
@@ -64,6 +67,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 9. **`Ctrl+Alt+Del` 拦不住**，这是 Windows 的安全设计，不是缺陷（详见 PRD §13）。
 10. **开发期逃生口**：debug 构建下闭关页右下角有「DEV 退出（不记录）」按钮（或 `Ctrl+Shift+F12` / `Ctrl+Alt+Shift+X`）；release 构建里这条命令不存在，按钮也不会渲染。
 11. 本软件不联网、不做完整性校验，本质是"防手滑"而不是"防黑客"。
+12. **记录页每次打开会解析两遍 `records.jsonl`**（`list_records` 一次、`stats_view` 一次）；当前量级无感，记录上千条后再合并成一次解析。
 
 ## 测试版与正式版的差别（自测用）
 

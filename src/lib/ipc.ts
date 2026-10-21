@@ -25,6 +25,8 @@ export interface BankInfo {
   name: string
   /** 题库总题数（记忆衰减接入后，可抽题数会小于它） */
   total: number
+  /** 当前可抽题数：总数减去冷却中的 */
+  drawable: number
 }
 
 /** 统计口径全在 Rust（`core::stats`），前端只负责显示 */

@@ -20,6 +20,8 @@ use crate::runtime::{current_payload, Runtime};
 
 const MIN_DURATION_MIN: u32 = 10;
 const MAX_DURATION_MIN: u32 = 480;
+/// 入关的题库下限：少于这个数，单轮的蒙对率会从 1/64 跳到 1/16（F-5.2）
+const MIN_QUESTIONS: usize = 3;
 /// 测试版把冷却缩到这个倍数（5 分钟 → 30 秒），否则自测要走完
 /// 5+10+15 分钟的冷却才能到第 3 轮抄写，一次验证半小时。
 /// 正式版恒为 1（这个常量只在 debug 编译里被用到）。
@@ -43,6 +45,9 @@ pub struct BankView {
     id: String,
     name: String,
     total: usize,
+    /// 当前**可抽**题数（去掉冷却中的）——F-1.2 要求与总数分开显示，
+    /// 且"可抽很少"不算阵法简陋，只有总数 < 30 才出黄字（A-16）
+    drawable: usize,
 }
 
 #[derive(Serialize)]
@@ -93,15 +98,28 @@ pub fn bootstrap(runtime: State<'_, Arc<Runtime>>) -> BootstrapView {
     });
 
     let bank = match runtime.bank.lock() {
-        Ok(bank) => BankView {
-            id: bank.id.clone(),
-            name: bank.name.clone(),
-            total: bank.len(),
-        },
+        Ok(bank) => {
+            let now_ms = SystemWall.wall_ms();
+            let drawable = match runtime.stats.lock() {
+                Ok(table) => bank
+                    .questions
+                    .iter()
+                    .filter(|question| !table.is_cooling(&question.id, now_ms))
+                    .count(),
+                Err(_) => bank.len(),
+            };
+            BankView {
+                id: bank.id.clone(),
+                name: bank.name.clone(),
+                total: bank.len(),
+                drawable,
+            }
+        }
         Err(_) => BankView {
             id: "basic".to_string(),
             name: "基础阵法".to_string(),
             total: 0,
+            drawable: 0,
         },
     };
 
@@ -134,12 +152,19 @@ pub fn start_session(
     // 成本基数在入关时固化进会话：状态机因此不必读文件，也不会中途被改配置影响
     let mut config = runtime.store.load_config();
 
-    // 题库在入关时重载一次（用户可能刚手动改过），且**空题库绝不允许入关**：
-    // 否则到时会出现"无题可问"却已经锁住用户的局面（PRD §12）
+    // 题库在入关时重载一次（用户可能刚手动改过）。
+    // **少于 3 题绝不允许入关**：F-5.2 的"蒙不过去"建立在"至少 3 题"上
+    // （3 题全对 1/64，2 题就变成 1/16），题库被手改成 2 题时宁可拒绝入关。
     let loaded = Bank::load(runtime.store.root());
-    if loaded.is_empty() {
-        log::error!("[ipc] 题库为空，拒绝入关（E_BANK_INVALID）");
-        return Err("E_BANK_INVALID: 题库为空或无法解析".to_string());
+    if loaded.len() < MIN_QUESTIONS {
+        log::error!(
+            "[ipc] 题库只有 {} 题（下限 {MIN_QUESTIONS}），拒绝入关（E_BANK_INVALID）",
+            loaded.len()
+        );
+        return Err(format!(
+            "E_BANK_INVALID: 题库至少需要 {MIN_QUESTIONS} 题，当前 {} 题",
+            loaded.len()
+        ));
     }
     if let Ok(mut guard) = runtime.bank.lock() {
         *guard = Arc::new(loaded);
