@@ -15,8 +15,8 @@ const store = useSessionStore()
 // 副屏窗口 label 是 display-N：只渲染环与倒计时，不承载任何交互（TDD §4.3）
 const isMirror = getCurrentWindow().label !== 'main'
 
-/** 开发期逃生口：只有 dev 构建显示，release 里既无按钮也无命令 */
-const devMode = import.meta.env.DEV
+/** 开发期逃生口：由 Rust 告知是否 debug 构建（release 里既无按钮也无命令） */
+const devMode = computed(() => store.debugBuild)
 
 function devExit(): void {
   ipc.devAbort().catch((err: unknown) => {
@@ -62,6 +62,7 @@ const confirmPayload = computed(() => (store.payload?.kind === 'confirm' ? store
     <header v-if="!isMirror" class="lock__head">
       <span>静修 · 阵法：基础阵法</span>
       <span v-if="store.goal" class="lock__goal">目标：{{ store.goal }}</span>
+      <span v-if="devMode" class="lock__dev">测试版：每题第一个选项即正确答案</span>
     </header>
 
     <section class="stage">
@@ -163,6 +164,11 @@ const confirmPayload = computed(() => (store.payload?.kind === 'confirm' ? store
   align-self: stretch;
   color: var(--fg-muted);
   font-size: 12px;
+}
+
+.lock__dev {
+  margin-left: auto;
+  color: #8c8375;
 }
 
 .stage {

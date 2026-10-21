@@ -44,6 +44,8 @@ export const useSessionStore = defineStore('session', () => {
   const bank = ref('basic')
   const bankName = ref('基础阵法')
   const bankTotal = ref(0)
+  /** debug 构建标记：由 Rust 的 cfg!(debug_assertions) 告知（release 里恒为 false） */
+  const debugBuild = ref(false)
   const result = ref<string | null>(null)
   const lastSession = ref<ipc.LastSession | null>(null)
   const lastError = ref<string | null>(null)
@@ -128,6 +130,7 @@ export const useSessionStore = defineStore('session', () => {
       bank.value = boot.bank.id || 'basic'
       bankName.value = boot.bank.name || '基础阵法'
       bankTotal.value = boot.bank.total
+      debugBuild.value = boot.debugBuild
       lastSession.value = boot.lastSession
       applyState(await ipc.getState())
 
@@ -315,6 +318,7 @@ export const useSessionStore = defineStore('session', () => {
     bank,
     bankName,
     bankTotal,
+    debugBuild,
     result,
     lastSession,
     lastDurationMin,

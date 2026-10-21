@@ -31,6 +31,8 @@ export interface BootstrapView {
   bank: BankInfo
   /** 上次异常中断的会话；正常启动为 null */
   lastSession: LastSession | null
+  /** debug 构建才为 true：前端据此显示 DEV 退出按钮与测试版提示 */
+  debugBuild: boolean
 }
 
 export interface StartResult {

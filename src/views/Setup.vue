@@ -4,7 +4,7 @@ import { computed, ref, watch } from 'vue'
 import { useSessionStore } from '../stores/session'
 
 const PRESETS = [25, 45, 60, 90, 120, 180] as const
-const MIN_MINUTES = 15
+const MIN_MINUTES = 10
 const MAX_MINUTES = 480
 const GOAL_MAX_LEN = 24
 /** 题库总数低于这个数才出"阵法简陋"黄字（PRD F-8.3 / A-16） */
@@ -73,7 +73,7 @@ function pick(preset: number): void {
         <span class="custom__label"
           >自定义（{{ MIN_MINUTES }}–{{ MAX_MINUTES }} 分钟，步进 5）</span
         >
-        <input v-model.number="duration" class="input" type="number" min="15" max="480" step="5" />
+        <input v-model.number="duration" class="input" type="number" min="10" max="480" step="5" />
       </label>
 
       <p v-if="duration < 25" class="tip">本次不计为有效日（当日累计 ≥25 分钟仍算）</p>

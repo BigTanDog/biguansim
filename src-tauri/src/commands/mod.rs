@@ -17,7 +17,7 @@ use crate::platform::time::{SystemMonotonic, SystemWall};
 use crate::platform::{hook, overlay};
 use crate::runtime::{current_payload, Runtime};
 
-const MIN_DURATION_MIN: u32 = 15;
+const MIN_DURATION_MIN: u32 = 10;
 const MAX_DURATION_MIN: u32 = 480;
 
 #[derive(Serialize)]
@@ -44,6 +44,10 @@ pub struct BootstrapView {
     bank: BankView,
     /// 上次异常中断的会话（本次启动时已记入记录）；正常启动为 None
     last_session: Option<LastSessionView>,
+    /// 是否 debug 构建：前端据此显示 DEV 退出按钮与"测试版"提示。
+    /// 用 Rust 的 `cfg!` 而不是 Vite 的 `import.meta.env.DEV`——后者在
+    /// `tauri build --debug` 里是 false，导致测试版没有逃生口（2026-10-21 踩过）。
+    debug_build: bool,
 }
 
 #[derive(Serialize)]
@@ -95,6 +99,7 @@ pub fn bootstrap(runtime: State<'_, Arc<Runtime>>) -> BootstrapView {
         config,
         bank,
         last_session,
+        debug_build: cfg!(debug_assertions),
     }
 }
 

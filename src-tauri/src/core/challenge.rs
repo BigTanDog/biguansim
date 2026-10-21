@@ -54,6 +54,10 @@ pub struct Round {
 
 impl Round {
     /// 打乱每题选项。`questions` 由 `bank::draw` 给出（同轮不重复）。
+    ///
+    /// **debug 构建的测试便利**：打乱之后再把正确项换到第一位，这样自测时
+    /// 每题选第一个就能全对，不必去题库里对答案。release 构建不含这段代码，
+    /// 真机上选项顺序仍然是打乱的（F-5.4 不变）。
     pub fn prepare(questions: Vec<Question>, attempt: u32, rng: &mut Rng) -> Round {
         let prepared = questions
             .into_iter()
@@ -66,6 +70,11 @@ impl Round {
                     .map(|(position, text)| (text.clone(), position == question.answer))
                     .collect();
                 rng.shuffle(&mut pairs);
+
+                #[cfg(debug_assertions)]
+                if let Some(position) = pairs.iter().position(|(_, correct)| *correct) {
+                    pairs.swap(0, position);
+                }
 
                 let answer_display = pairs.iter().position(|(_, correct)| *correct).unwrap_or(0);
                 let options: Vec<String> = pairs.into_iter().map(|(text, _)| text).collect();
@@ -248,6 +257,21 @@ mod tests {
         let r = round(2, 13);
         let json = serde_json::to_string(&r.view().unwrap()).unwrap();
         assert!(!json.contains("answer"), "题面里出现了 answer：{json}");
+    }
+
+    /// 测试便利：debug 构建里正确项固定在第一位（release 仍打乱，由 cfg 保证）
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_build_puts_correct_option_first() {
+        for seed in 0..16u64 {
+            let prepared = round(4, seed);
+            for question in &prepared.questions {
+                assert_eq!(
+                    question.answer_display, 0,
+                    "debug 构建应把正确项换到第一位，方便自测"
+                );
+            }
+        }
     }
 
     #[test]

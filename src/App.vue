@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 
 import * as ipc from './lib/ipc'
 import { useSessionStore } from './stores/session'
@@ -10,8 +10,13 @@ import Setup from './views/Setup.vue'
 
 const store = useSessionStore()
 
-/** 开发期逃生口：只有 dev 构建才挂，正式产物里既没有命令也没有这个监听 */
-const DEV = import.meta.env.DEV
+/**
+ * 开发期逃生口：**由 Rust 的 `cfg!(debug_assertions)` 告知**，不用 Vite 的
+ * `import.meta.env.DEV`——后者在 `tauri build --debug` 里是 false，
+ * 会造成"测试版没有退出按钮"（2026-10-21 实测踩过）。
+ * release 构建里前端不挂监听，Rust 侧也没有 `dev_abort` 命令。
+ */
+const DEV = computed(() => store.debugBuild)
 
 /**
  * 两条组合键：`Ctrl+Shift+F12` 与 `Ctrl+Alt+Shift+X`。
@@ -25,7 +30,7 @@ function isDevExitCombo(event: KeyboardEvent): boolean {
 }
 
 function onDevKeydown(event: KeyboardEvent): void {
-  if (!DEV || !isDevExitCombo(event)) {
+  if (!DEV.value || !isDevExitCombo(event)) {
     return
   }
   event.preventDefault()

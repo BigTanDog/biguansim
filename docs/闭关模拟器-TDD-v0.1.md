@@ -221,6 +221,7 @@ sleepAccum += max(0, wallDelta - monoDelta)
 - 回调逻辑：查状态机 → `return 1`（吞掉）。
 - 拦截表与放行表见 PRD F-3.3 / F-3.4；两张表用静态 `match`，**不得**在回调里分配内存或读配置文件（每次按键都读配置会累积延迟）。
 - 回调超过 `LowLevelHooksTimeout`（默认 1 s）会被系统静默摘除 → 因此回调内零耗时。
+- **Esc 长按必须只认"按下沿"**：长按时系统每 ~30 ms 重发一次 `WM_KEYDOWN`，若每次都用"现在"覆盖起点，`esc_hold_ms()` 永远接近 0，8 秒破戒永远触发不了（2026-10-21 真机踩坑）。计时状态打包进一个 `AtomicU64`（held / armed / downMs），判定全部在 `keyfilter::esc_on_key/esc_hold_ms/esc_consume` 这三个**纯函数**里，回调只做 load→store，不加锁、不分配。
 
 **按键状态机（必须实现，不能只做"查表 return 1"）**
 
