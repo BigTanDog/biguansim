@@ -103,14 +103,15 @@
 | `core::session` | 八态状态机、转移合法性、成本口径、到点规则（副作用由调用方执行） | `transition(event, elapsed) -> Outcome`、`copy_chars()`、`note_fault()`、`reset()` |
 | `core::timer` | 单调计时 + 睡眠累计 + 时间篡改检测 | `elapsed_ms() -> u64`、`suspect_clock_change() -> Option<i64>` |
 | `core::cost` | 退出成本公式（纯函数，基数为入参） | `cooldown_min/ms(n, base)`、`question_count(n, base)`、`copy_chars(n)` |
-| `core::bank` | 题库加载、校验、抽题（记忆衰减在 M5 接入） | `load(dir)`、`draw(n, &mut Rng) -> Vec<Question>` |
+| `core::bank` | 题库加载、校验、抽题（含记忆衰减的退化） | `load(dir)`、`draw(n, &mut Rng)`（不看统计）、`draw_with(&Table, n, now_ms, &mut Rng)`（正式抽题） |
 | `core::challenge` | 选项打乱与逐题判定（答案不出 Rust） | `Round::prepare(questions, attempt, rng)`、`submit(choice) -> Judgement`、`view() -> QuestionView` |
 | `core::copy` | 抄写任务与逐字校验（不归一化） | `CopyTask::new(text)`、`check(target, typed) -> CopyVerdict` |
 | `core::rng` | 可复现随机数（xorshift64*，不引 `rand`） | `Rng::new(seed)`、`below(n)`、`shuffle(&mut [T])` |
-| `core::stats` | 累计/连续天数/破戒/有效日 | `summary(today) -> Stats` |
+| `core::bank_stats` | `bank/stats.json`：冷却窗口与答对/答错计数 | `Table::{load, save, mark, is_cooling, last_asked_ms}` |
+| `core::stats` | 累计/连续天数/破戒/有效日（纯函数，日期由调用方换算） | `summary(&[DatedRecord], today: LocalDate) -> Summary`、`LocalDate::yesterday()`、`date_from_unix_ms_utc(ms)` |
 | `core::quote` | 语料加载、阶段选择、变量渲染、防重复 | `pick(stage, kind, vars) -> String` |
 | `core::store` | 配置/流水/快照的读写与迁移 | `atomic_write(path, bytes)`、`append_jsonl()` |
-| `io_queue` | 落盘队列的唯一消费者（进程级常驻） | `run(store, rx)`、`IoJob::{Snapshot, ClearSnapshot}` |
+| `io_queue` | 落盘队列的唯一消费者（进程级常驻） | `run(store, rx)`、`IoJob::{Snapshot, ClearSnapshot, BankStats}` |
 | `platform::keyfilter` | 按键判定**纯函数**（不含任何系统调用，可单测） | `decide(vk, is_down, &mut ModState) -> Swallow/Pass` |
 | `platform::hook` | 键盘钩子安装/卸载、60 s 周期重装（**先装新的再卸旧的**）、每秒 `GetAsyncKeyState` 键态校正、Esc 长按时间戳 | `install(&AppHandle) -> Result<()>`、`esc_hold_ms() -> u64` |
 | `platform::focus` | 抢焦点：前台事件立即抢 + 500 ms 兜底重试 + `AttachThreadInput` 强制；**回调内不做 IO** | `start(hwnd) / stop()` |
@@ -220,6 +221,7 @@ sleepAccum += max(0, wallDelta - monoDelta)
 - 类型：`WH_KEYBOARD_LL`，装在专用线程，装完跑 `GetMessage` 循环。
 - 回调逻辑：查状态机 → `return 1`（吞掉）。
 - 拦截表与放行表见 PRD F-3.3 / F-3.4；两张表用静态 `match`，**不得**在回调里分配内存或读配置文件（每次按键都读配置会累积延迟）。
+- **本地日换算只在平台层**：`platform::time::local_date(wall_ms)` 用 `FileTimeToSystemTime` + `SystemTimeToTzSpecificLocalTime`，夏令时与改时区都跟系统走；失败时退回 UTC 日期（只可能让跨午夜的那条归错一天）。`core::stats` 只收 `LocalDate`，不碰系统时间。
 - 回调超过 `LowLevelHooksTimeout`（默认 1 s）会被系统静默摘除 → 因此回调内零耗时。
 - **`LockWorkStation()` 绝不能写在回调里**：锁屏要切安全桌面，耗时可达数百毫秒，回调超时即被摘钩，之后所有按键放行。回调只 `AtomicBool::store`，由 50 ms 轮询的专用线程执行（M4 计划 D-35）。同理，`app.emit` 也不能在钩子线程的消息循环里做。
 - **Esc 长按必须只认"按下沿"**：长按时系统每 ~30 ms 重发一次 `WM_KEYDOWN`，若每次都用"现在"覆盖起点，`esc_hold_ms()` 永远接近 0，8 秒破戒永远触发不了（2026-10-21 真机踩坑）。计时状态打包进一个 `AtomicU64`（held / armed / downMs），判定全部在 `keyfilter::esc_on_key/esc_hold_ms/esc_consume` 这三个**纯函数**里，回调只做 load→store，不加锁、不分配。
@@ -323,7 +325,7 @@ snapshot = { count, [(width, height, scale_factor) ...] }  // 按坐标排序后
 | `get_state` | — | `SessionState` 全量 | 前端重连/重绘用 |
 | `list_records` | `{ limit }` | `Record[]` | 记录页 |
 | `list_questions` | — | `QuestionSummary[]` | 题库页（不含答案） |
-| `update_config` | `{ patch }` | `{ config }` | 设置页 |
+| `update_config` | `{ patch }` | `{ config }` | 设置页。**浅合并 + 校验 + 原子写**：`cooldownBase ∈ [3,10]`、`questionBase ∈ [3,5]`、`chimeVolume ∈ [0,0.6]`、`theme ∈ {dark, light}`；非法值返回 `E_INVALID_CONFIG` 且**不落盘**（M5） |
 | `open_data_dir` | — | `{ ok }` | 打开 `%APPDATA%` |
 | `restore_brightness` | — | `{ ok }` | 手动兜底 |
 
@@ -413,6 +415,7 @@ PRD §5 的状态与转移表**原样迁入**，此处只补实现约定（M4 �
 | `records.jsonl` | 同上 | 追加写，每行一次 flush | 损坏行跳过并计数，界面提示 |
 | `session.json` | 同上 | 每 15 s 原子写 | 存在即视为异常中断 |
 | `bank/seed.json` | 同上 | 首次从内嵌资源复制 | 解析失败 → 回退内嵌，不覆盖用户文件 |
+| `bank/stats.json` | 原子写 | 每次作答后（`IoJob::BankStats`，整表覆写） | 解析失败 → 当空表（只影响记忆衰减，可重建） |
 | `bank/stats.json` | 同上 | 每次答题后原子写 | 丢失仅影响记忆衰减，可重建为空 |
 | `quotes.json` | 同上 | 首次复制，用户可改 | 解析失败 → 内嵌兜底 |
 | `display_baseline.json` | 同上 | 入关写、出关删 | 存在即视为亮度可能残留 → 启动时自动还原并告知 |
@@ -568,7 +571,7 @@ biguansim/
 | M2 | `core::session` + `events` + `Lock.vue` + 钟鸣 | 到点自动解锁全流程 |
 | M3 | `platform::hook`（复用 M1 的 `keyfilter`）、`focus/sleep/display`（**`brightness` 延后**，见 PRD A-14 注） | 快捷键失效（含单击 Win 不弹开始菜单）、抢回前台 ≤50 ms、`powercfg /requests` 见请求、拔屏 2 s 内出关 |
 | M4 | `core::cost/bank` + `Challenge` 投影 + 抄写 | 冷却与成本递增全链路 |
-| M5 | `core::stats/quote` + 记录/题库/设置/引导页 | 60 题 + 语料 180 条 + 抄写段 10 段 + 7 个页面 |
+| M5 | `core::{bank_stats,stats}` + 记录/题库/设置/引导页 | **30 题** + 语料 **90 条** + 抄写段 10 段 + 7 个页面（rev4 修正规模） |
 
 > M1 结束就应能"真用"（能锁 25 分钟、能到点解、能杀进程不锁死）。**先能锁，再谈漂亮。**
 
