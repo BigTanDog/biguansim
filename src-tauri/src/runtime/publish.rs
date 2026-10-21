@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter};
 
-use crate::core::cost;
 use crate::core::session::{SessionInfo, SessionState, EMERGENCY_SENTENCE};
 use crate::events::{PhasePayload, StateChanged};
 use crate::platform::focus;
@@ -65,7 +64,8 @@ fn payload_for(state: SessionState, session: &SessionInfo, elapsed: u64) -> Opti
     match state {
         SessionState::Cool => Some(PhasePayload::Cool {
             attempt: session.attempts,
-            cooldown_ms: cost::cooldown_ms(session.attempts, session.cooldown_base) as i64,
+            // 用会话里存的实数（debug 构建会缩放冷却，不能再按公式重算一遍）
+            cooldown_ms: session.cool_ms as i64,
             remain_ms: session.cooldown_remain_ms(elapsed).unwrap_or(0) as i64,
         }),
         SessionState::Challenge => {

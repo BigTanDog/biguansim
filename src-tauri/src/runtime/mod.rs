@@ -229,6 +229,10 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
         let mut last_snapshot = Instant::now();
         let mut last_remaining = u64::MAX;
         let mut last_esc_hold = 0u64;
+        // Esc 达到 2 秒时打一条日志（每次按下只打一次）：用于区分
+        // "钩子没收到 Esc" 与 "收到了但没到 8 秒"
+        let mut esc_logged = false;
+        let mut last_bank_warn: Option<Instant> = None;
 
         loop {
             thread::sleep(TICK_INTERVAL);
@@ -283,7 +287,7 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
                     continue;
                 }
                 Ok(Outcome::CooldownElapsed) => {
-                    begin_challenge(&app, &runtime, elapsed);
+                    begin_challenge(&app, &runtime, elapsed, &mut last_bank_warn);
                     continue;
                 }
                 _ => {}
@@ -299,6 +303,15 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
                             held_ms: held as i64,
                         },
                     );
+                }
+                // 诊断：有这一行说明钩子侧正常收到了 Esc，只是还没到 8 秒；
+                // 完全没有这一行则说明 Esc 根本没进钩子（或当时不在 Locked）
+                if !esc_logged && held >= 2_000 {
+                    ::log::info!("[esc] 已按住 {held} ms（门槛 {ESC_HOLD_TRIGGER_MS} ms）");
+                    esc_logged = true;
+                }
+                if held == 0 {
+                    esc_logged = false;
                 }
                 last_esc_hold = held;
 
@@ -370,7 +383,15 @@ fn session_of(runtime: &Arc<Runtime>) -> Option<crate::core::session::SessionInf
 }
 
 /// 冷却到点 → 抽题 → Challenge。抽不到题就留在 Cool 并提示（绝不变成"可逃脱"）。
-fn begin_challenge(app: &AppHandle, runtime: &Arc<Runtime>, elapsed: u64) {
+///
+/// `last_warn` 用于限频：抽不到题时 tick 每 250 ms 会再进来一次，
+/// 不限频就会每秒弹 4 条 toast。
+fn begin_challenge(
+    app: &AppHandle,
+    runtime: &Arc<Runtime>,
+    elapsed: u64,
+    last_warn: &mut Option<Instant>,
+) {
     let Some(session) = session_of(runtime) else {
         return;
     };
@@ -385,14 +406,27 @@ fn begin_challenge(app: &AppHandle, runtime: &Arc<Runtime>, elapsed: u64) {
     let drawn = bank.draw(needed as usize, &mut rng);
     if drawn.is_empty() {
         ::log::error!("[bank] 抽不到题（题库为空），保持冷却等待重试");
-        let _ = app.emit(
-            "notice://toast",
-            crate::events::Toast {
-                level: "error",
-                text: "题库为空，无法出题；本次只得继续等待".to_string(),
-            },
-        );
+        let should_warn = last_warn.map_or(true, |at| at.elapsed() >= Duration::from_secs(10));
+        if should_warn {
+            *last_warn = Some(Instant::now());
+            let _ = app.emit(
+                "notice://toast",
+                crate::events::Toast {
+                    level: "error",
+                    text: "题库为空，无法出题；本次只得继续等待".to_string(),
+                },
+            );
+        }
         return;
+    }
+
+    if drawn.len() < needed as usize {
+        // M4 的题库只有 12 题、单轮最多 5 题，正常不会触发；
+        // 一旦 M5 接入记忆衰减，这条就是"退化规则没生效"的告警。
+        ::log::warn!(
+            "[challenge] 可抽题不足：需要 {needed} 题，只抽到 {} 题（M5 需按 F-8.2 三级退化补齐）",
+            drawn.len()
+        );
     }
 
     let round = Round::prepare(drawn, session.attempts, &mut rng);

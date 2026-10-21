@@ -104,6 +104,10 @@ function pick(preset: number): void {
       入关
     </button>
 
+    <p v-if="store.debugBuild" class="tip tip--dev">
+      测试版：正确项固定第一项 · 冷却缩短为 1/10（5 分钟 → 30 秒）· 闭关页右下角有 DEV 退出
+    </p>
+
     <p class="footnote">
       闭关中可点右下角「解开阵法」退出：先冷却，再答问阵，全对方可出关；第 3
       次起还要抄写。遇急事可长按 Esc 八秒走破戒通道（记为一次破戒）。Ctrl+Alt+Del 与 Win
@@ -201,6 +205,13 @@ function pick(preset: number): void {
   margin-top: 10px;
   color: var(--fg-muted);
   font-size: 11px;
+}
+
+.tip--dev {
+  padding: 6px 10px;
+  border-left: 2px solid #8c8375;
+  background: var(--dialog-bg);
+  color: #c9b99a;
 }
 
 .bank {

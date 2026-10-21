@@ -62,7 +62,7 @@ const confirmPayload = computed(() => (store.payload?.kind === 'confirm' ? store
     <header v-if="!isMirror" class="lock__head">
       <span>静修 · 阵法：基础阵法</span>
       <span v-if="store.goal" class="lock__goal">目标：{{ store.goal }}</span>
-      <span v-if="devMode" class="lock__dev">测试版：每题第一个选项即正确答案</span>
+      <span v-if="devMode" class="lock__dev">测试版：正确项固定第一项 · 冷却 ×1/10</span>
     </header>
 
     <section class="stage">

@@ -12,7 +12,7 @@ export type Phase = 'setup' | 'arming' | 'lock' | 'settled'
 const ERROR_TEXT: Record<string, string> = {
   E_REMAIN_TOO_SHORT: '距出关不足一次冷却，请稍候到点。',
   E_CONFIRM_MISMATCH: '抄写不一致，请逐字核对后再确认。',
-  E_INVALID_CHOICE: '这一题已失效，界面已刷新。',
+  E_INVALID_CHOICE: '这一题已失效。',
   E_BANK_INVALID: '题库不可用，无法出题。',
   E_STATE_ILLEGAL: '状态已变化，请重试。',
   E_HOOK_FAILED: '结界未能生效，已取消入关。',
@@ -249,6 +249,15 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  /** 重取一次全量状态：用于"陈旧点击"这类静默收口的场景 */
+  async function refresh(): Promise<void> {
+    try {
+      applyState(await ipc.getState())
+    } catch (err) {
+      lastError.value = String(err)
+    }
+  }
+
   async function choose(choice: number): Promise<void> {
     const current = payload.value
     if (current?.kind !== 'challenge') {
@@ -258,6 +267,12 @@ export const useSessionStore = defineStore('session', () => {
     try {
       await ipc.submitChoice(current.id, choice)
     } catch (err) {
+      // 连点两下时第二下带的是旧题号，后端会正确拒绝：这种情况静默重取，
+      // 不要把"界面已刷新"这种承诺了却没做的事弹给用户（2026-10-21 审阅意见）
+      if (String(err).startsWith('E_INVALID_CHOICE')) {
+        await refresh()
+        return
+      }
       notify('warn', errorText(err))
     }
   }
@@ -328,6 +343,7 @@ export const useSessionStore = defineStore('session', () => {
     escHoldMs,
     progress,
     notify,
+    refresh,
     init,
     start,
     cancelArming,

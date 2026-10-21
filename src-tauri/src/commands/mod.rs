@@ -19,6 +19,13 @@ use crate::runtime::{current_payload, Runtime};
 
 const MIN_DURATION_MIN: u32 = 10;
 const MAX_DURATION_MIN: u32 = 480;
+/// 测试版把冷却缩到这个倍数（5 分钟 → 30 秒），否则自测要走完
+/// 5+10+15 分钟的冷却才能到第 3 轮抄写，一次验证半小时。
+/// 正式版恒为 1（这个常量只在 debug 编译里被用到）。
+#[cfg(debug_assertions)]
+const COST_SCALE: u32 = 10;
+#[cfg(not(debug_assertions))]
+const COST_SCALE: u32 = 1;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -150,6 +157,7 @@ pub fn start_session(
                 bank,
                 cooldown_base: config.cooldown_base,
                 question_base: config.question_base,
+                cost_scale: COST_SCALE,
             },
             0,
         ) {
