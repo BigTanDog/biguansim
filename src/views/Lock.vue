@@ -67,10 +67,15 @@ function onEscKeydown(event: KeyboardEvent): void {
   const startedAt = performance.now()
 
   escTimer = window.setInterval(() => {
+    if (escFired) {
+      return
+    }
     escLocalMs.value = performance.now() - startedAt
-    if (!escFired && escLocalMs.value >= ESC_TOTAL_MS) {
+    if (escLocalMs.value >= ESC_TOTAL_MS) {
       escFired = true
       stopEscTimer()
+      // 触发后立刻收掉进度环：面板要接管注意力；手还按着也不该再压一层遮罩
+      escLocalMs.value = 0
       ipc.requestEmergency().catch((err: unknown) => {
         store.notify('error', `破戒通道未能打开：${String(err)}`)
       })

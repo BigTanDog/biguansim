@@ -12,6 +12,7 @@ export interface Config {
   theme: string
   lastDurationMin: number
   recentQuotes: string[]
+  onboarded: boolean
 }
 
 export interface LastSession {

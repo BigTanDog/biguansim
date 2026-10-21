@@ -57,6 +57,8 @@ pub struct Config {
     pub theme: String,
     pub last_duration_min: u32,
     pub recent_quotes: Vec<String>,
+    /// 首次引导是否已看完（F-11.4：三步都要点，不接受跳过）
+    pub onboarded: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -73,6 +75,7 @@ impl Default for Config {
             theme: "dark".to_string(),
             last_duration_min: 120,
             recent_quotes: Vec::new(),
+            onboarded: false,
             extra: Map::new(),
         }
     }

@@ -13,6 +13,13 @@ const store = useSessionStore()
 const text = ref('')
 const input = ref<HTMLInputElement | null>(null)
 const busy = ref(false)
+/**
+ * 面板是从「按住 Esc 满 8 秒」进来的，进来时**手还按着**：
+ * 自动重复的 keydown 会不停打进来，若直接当取消，面板刚出现就会被自己关掉
+ * （2026-10-21 实测"闪一下就没了"）。所以必须等到一次 keyup，
+ * 之后新的按下才算"我要取消"。
+ */
+let escReleased = false
 
 const matched = computed(() => text.value === props.sentence)
 const expected = computed(() => Array.from(props.sentence).length)
@@ -31,17 +38,36 @@ function cancel(): void {
 }
 
 function onKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') {
+    return
+  }
+  event.preventDefault()
+
+  if (event.repeat) {
+    return
+  }
+  // 手还按着的时候不算数：先松一次，再按才是真的想取消
+  if (!escReleased) {
+    return
+  }
+  cancel()
+}
+
+function onKeyup(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
-    event.preventDefault()
-    cancel()
+    escReleased = true
   }
 }
 
 onMounted(() => {
   input.value?.focus()
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('keyup', onKeyup)
 })
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('keyup', onKeyup)
+})
 </script>
 
 <template>

@@ -9,7 +9,7 @@ import * as ipc from '../lib/ipc'
 export type Phase = 'setup' | 'arming' | 'lock' | 'settled'
 
 /** Idle 下的二级页面（F-1.6：不建独立窗口） */
-export type View = 'setup' | 'records' | 'bank'
+export type View = 'setup' | 'records' | 'bank' | 'settings'
 
 /** 错误码 → 人话（PRD §12 / F-4.5）。未收录的码原样显示，便于排障 */
 const ERROR_TEXT: Record<string, string> = {
@@ -69,6 +69,9 @@ export const useSessionStore = defineStore('session', () => {
   let noticeTimer: number | undefined
 
   const lastDurationMin = computed(() => config.value?.lastDurationMin ?? 120)
+
+  /** 首次引导是否还没看（F-11.1）：配置到手且 onboarded 为 false 才算 */
+  const needsOnboarding = computed(() => config.value !== null && !config.value.onboarded)
 
   const progress = computed(() => {
     if (targetMs.value <= 0) {
@@ -141,6 +144,7 @@ export const useSessionStore = defineStore('session', () => {
       debugBuild.value = boot.debugBuild
       stats.value = boot.stats
       lastSession.value = boot.lastSession
+      applyTheme(boot.config.theme)
       applyState(await ipc.getState())
 
       await ipc.onTick((tick) => {
@@ -356,7 +360,39 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  function openSettings(): void {
+    view.value = 'settings'
+  }
+
   function closeSubPage(): void {
+    view.value = 'setup'
+  }
+
+  /** 设置页写配置：成功后把 Rust 返回的整份配置换掉（含 extra 保留字段） */
+  async function saveConfig(patch: Partial<ipc.Config>): Promise<boolean> {
+    try {
+      const next = await ipc.updateConfig(patch)
+      config.value = next
+      applyTheme(next.theme)
+      return true
+    } catch (err) {
+      notify('error', errorText(err))
+      return false
+    }
+  }
+
+  /** 暖白/暗色：theme.css 用 `[data-theme='light']` 覆盖变量 */
+  function applyTheme(theme: string): void {
+    if (theme === 'light') {
+      document.documentElement.dataset.theme = 'light'
+    } else {
+      delete document.documentElement.dataset.theme
+    }
+  }
+
+  /** 首次引导（F-11.4）：三步都点过才写 onboarded */
+  async function finishOnboarding(): Promise<void> {
+    await saveConfig({ onboarded: true })
     view.value = 'setup'
   }
 
@@ -396,7 +432,11 @@ export const useSessionStore = defineStore('session', () => {
     refreshStats,
     openRecords,
     openBank,
+    openSettings,
     closeSubPage,
+    saveConfig,
+    finishOnboarding,
+    needsOnboarding,
     init,
     start,
     cancelArming,

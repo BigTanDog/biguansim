@@ -39,6 +39,11 @@ function again(): void {
     <p class="settled__result">{{ label }}</p>
     <p class="settled__note">{{ note }}</p>
 
+    <p v-if="store.stats" class="settled__stats num">
+      累计 {{ formatElapsed(store.stats.totalMs) }} · 连续 {{ store.stats.streakDays }} 天 · 有效日
+      {{ store.stats.validDays }} 天
+    </p>
+
     <div class="settled__actions">
       <button class="btn btn--primary" type="button" @click="again">再入一关</button>
     </div>
@@ -101,6 +106,12 @@ function again(): void {
   border-color: var(--accent);
   background: var(--accent);
   color: #14110e;
+}
+
+.settled__stats {
+  margin-top: 6px;
+  color: var(--fg-muted);
+  font-size: 12px;
 }
 
 .settled__todo {

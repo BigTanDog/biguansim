@@ -61,6 +61,10 @@ function pick(preset: number): void {
         <span class="nav__label">题库</span>
         <span class="nav__value num">{{ store.bankTotal }} 题</span>
       </button>
+      <button class="nav__item" type="button" @click="store.openSettings()">
+        <span class="nav__label">设置</span>
+        <span class="nav__value">主题 / 成本 / 关于</span>
+      </button>
     </nav>
 
     <section v-if="store.lastSession" class="notice">
@@ -159,7 +163,7 @@ function pick(preset: number): void {
 .nav {
   display: grid;
   gap: 10px;
-  grid-template-columns: 1.6fr 1fr;
+  grid-template-columns: 1.6fr 1fr 1fr;
 }
 
 .nav__item {

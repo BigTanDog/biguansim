@@ -6,7 +6,9 @@ import { useSessionStore } from './stores/session'
 import Arming from './views/Arming.vue'
 import Bank from './views/Bank.vue'
 import Lock from './views/Lock.vue'
+import Onboarding from './views/Onboarding.vue'
 import Records from './views/Records.vue'
+import Settings from './views/Settings.vue'
 import Settled from './views/Settled.vue'
 import Setup from './views/Setup.vue'
 
@@ -77,8 +79,11 @@ onUnmounted(() => {
 <template>
   <!-- Idle 下才有二级页面（F-1.6）；闭关/结算期间一律渲染会话视图 -->
   <template v-if="store.phase === 'setup'">
-    <Records v-if="store.view === 'records'" />
+    <!-- 首次引导没看完之前，什么都不给（F-11.4） -->
+    <Onboarding v-if="store.needsOnboarding" />
+    <Records v-else-if="store.view === 'records'" />
     <Bank v-else-if="store.view === 'bank'" />
+    <Settings v-else-if="store.view === 'settings'" />
     <Setup v-else />
   </template>
   <Arming v-else-if="store.phase === 'arming'" />

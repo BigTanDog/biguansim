@@ -192,8 +192,8 @@ fn validate(config: &Config) -> Result<(), String> {
     if !(0.0..=0.6).contains(&config.chime_volume) {
         return Err("E_INVALID_CONFIG: 音量须在 0–0.6".to_string());
     }
-    if !matches!(config.theme.as_str(), "dark" | "warm") {
-        return Err("E_INVALID_CONFIG: 主题只能是 dark 或 warm".to_string());
+    if !matches!(config.theme.as_str(), "dark" | "light") {
+        return Err("E_INVALID_CONFIG: 主题只能是 dark 或 light".to_string());
     }
     Ok(())
 }
