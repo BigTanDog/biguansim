@@ -24,6 +24,8 @@ pub struct Prepared {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionView {
+    /// 题号：只用于让 `submit_choice` 拒绝陈旧点击，不含任何答案信息
+    pub id: String,
     /// 第几题（1 起算）
     pub index: usize,
     pub total: usize,
@@ -108,6 +110,7 @@ impl Round {
     pub fn view(&self) -> Option<QuestionView> {
         let question = self.questions.get(self.index)?;
         Some(QuestionView {
+            id: question.id.clone(),
             index: self.index + 1,
             total: self.questions.len(),
             stem: question.stem.clone(),

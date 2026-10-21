@@ -89,6 +89,7 @@ pub fn finish(
             goal: session.goal.clone(),
             elapsed_ms: session.elapsed_ms as i64,
             target_ms: session.target_ms as i64,
+            payload: None,
         },
     );
 

@@ -25,6 +25,10 @@ const RETRY_INTERVAL_MS: u32 = 500;
 const WARN_AFTER_FAILURES: i32 = 3;
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// 暂停抢焦点（抄写/急事确认期间）：中文输入法的候选窗属于别的线程，
+/// 抢焦点会反复把前台夺回来，可能把候选窗顶掉。用户此时只在本窗口输入，
+/// 暂停没有安全代价。
+static PAUSED: AtomicBool = AtomicBool::new(false);
 static HOOK_TID: AtomicU32 = AtomicU32::new(0);
 static TARGET: AtomicIsize = AtomicIsize::new(0);
 static OUR_PID: AtomicU32 = AtomicU32::new(0);
@@ -105,7 +109,22 @@ pub fn start(target: isize) -> Result<(), String> {
     Ok(())
 }
 
+/// 抄写 / 急事确认期间暂停抢焦点（输入法需要前台）。
+pub fn pause() {
+    if !PAUSED.swap(true, Ordering::SeqCst) {
+        ::log::info!("[focus] 暂停抢焦点（输入期间让位给输入法）");
+    }
+}
+
+pub fn resume() {
+    if PAUSED.swap(false, Ordering::SeqCst) {
+        ::log::info!("[focus] 恢复抢焦点");
+    }
+}
+
 pub fn stop() {
+    PAUSED.store(false, Ordering::SeqCst);
+
     if !RUNNING.swap(false, Ordering::SeqCst) {
         return;
     }
@@ -123,6 +142,11 @@ pub fn stop() {
 
 /// 把前台抢回我们的窗口。返回是否成功；调用方负责计数与日志。
 fn try_reclaim() -> bool {
+    // 抄写/确认期间主动让位给输入法（见 PAUSED 的注释）
+    if PAUSED.load(Ordering::Relaxed) {
+        return true;
+    }
+
     let target = TARGET.load(Ordering::Relaxed) as HWND;
     if target.is_null() {
         return true;

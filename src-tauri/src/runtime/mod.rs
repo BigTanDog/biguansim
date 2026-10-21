@@ -13,11 +13,13 @@
 //! 锁顺序全项目统一（否则会 ABBA 死锁）：**先 timer、后 machine**，
 //! 且 timer 的 guard 必须在取 machine 之前 drop。
 //!
-//! 出关善后在 `finish.rs`（单一入口，五种离开路径都调它）。
+//! 分工：`publish.rs` 只读状态机造投影；`finish.rs` 是唯一的出关善后入口。
 
 mod finish;
+mod publish;
 
 pub use finish::finish;
+pub use publish::{current_payload, publish_state};
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -26,14 +28,19 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::core::bank::Bank;
+use crate::core::challenge::Round;
+use crate::core::cost;
+use crate::core::quote::QuoteBook;
+use crate::core::rng::Rng;
 use crate::core::session::{Outcome, SessionEvent, SessionMachine, SessionState, ARMING_MS};
 use crate::core::store::{Record, SessionResult, SessionSnapshot, Store};
-use crate::core::timer::{MonotonicClock, Timer};
-use crate::events::{ArmingTick, Chime, StateChanged, TimerTick};
+use crate::core::timer::{MonotonicClock, Timer, WallClock};
+use crate::events::{ArmingTick, Chime, CoolTick, EscHold, StateChanged, TimerTick};
 use crate::io_queue::IoJob;
 use crate::platform::log as plog;
 use crate::platform::time::{SystemMonotonic, SystemWall};
-use crate::platform::{display, focus, overlay, power, sleep};
+use crate::platform::{display, focus, hook, overlay, power, sleep};
 
 /// 快照落盘间隔（TDD §4.8）
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(15);
@@ -41,6 +48,8 @@ const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(15);
 const TICK_INTERVAL: Duration = Duration::from_millis(250);
 /// 末 10 秒三声轻滴答的触发点（PRD F-7.2）
 const CHIME_THRESHOLDS: [u64; 3] = [10_000, 7_000, 4_000];
+/// Esc 长按触发破戒确认（PRD F-6.1）
+const ESC_HOLD_TRIGGER_MS: u64 = 8_000;
 
 pub struct RecoveredInfo {
     pub actual_ms: i64,
@@ -53,6 +62,9 @@ pub struct Runtime {
     pub store: Store,
     pub io_tx: Sender<IoJob>,
     pub recovered: Mutex<Option<RecoveredInfo>>,
+    /// 题库：只在入关与抽题时读，不进 `SessionInfo`（后者每 250 ms 被 clone）
+    pub bank: Mutex<Arc<Bank>>,
+    pub quotes: Arc<QuoteBook>,
 }
 
 pub fn init(app: &AppHandle) -> Arc<Runtime> {
@@ -65,6 +77,13 @@ pub fn init(app: &AppHandle) -> Arc<Runtime> {
     let (io_tx, io_rx) = mpsc::channel::<IoJob>();
 
     let recovered = recover_previous(&store);
+    let bank = Bank::load(store.root());
+    let quotes = QuoteBook::load(store.root());
+    ::log::info!(
+        "[bank] 已加载题库 {} 题；语料抄写段 {} 段",
+        bank.len(),
+        quotes.copy_count()
+    );
 
     spawn_io(store.clone(), io_rx);
 
@@ -74,6 +93,8 @@ pub fn init(app: &AppHandle) -> Arc<Runtime> {
         store,
         io_tx,
         recovered: Mutex::new(recovered),
+        bank: Mutex::new(Arc::new(bank)),
+        quotes: Arc::new(quotes),
     });
 
     spawn_power(runtime.clone());
@@ -99,10 +120,21 @@ pub fn force_settle(app: &AppHandle, runtime: &Arc<Runtime>, result: SessionResu
         machine.transition(SessionEvent::Finish { result }, elapsed)
     };
 
+    handle_settled(app, runtime, outcome, "强制结算");
+}
+
+/// 便于命令层复用的"结算就善后"收口
+pub fn handle_settled(
+    app: &AppHandle,
+    runtime: &Arc<Runtime>,
+    outcome: Result<Outcome, crate::core::session::SessionError>,
+    label: &str,
+) {
     match outcome {
         Ok(Outcome::Settled { result, session }) => finish(app, runtime, result, &session),
-        Ok(other) => ::log::warn!("[ipc] 强制结算未生效：{other:?}"),
-        Err(err) => ::log::warn!("[ipc] 强制结算被拒：{err:?}"),
+        Ok(Outcome::Unchanged) => {}
+        Ok(other) => ::log::debug!("[ipc] {label}：{other:?}"),
+        Err(err) => ::log::warn!("[ipc] {label}被拒：{err:?}"),
     }
 }
 
@@ -196,6 +228,7 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
     thread::spawn(move || {
         let mut last_snapshot = Instant::now();
         let mut last_remaining = u64::MAX;
+        let mut last_esc_hold = 0u64;
 
         loop {
             thread::sleep(TICK_INTERVAL);
@@ -209,11 +242,13 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
                 SessionState::Arming => {
                     step_arming(&app, &runtime);
                     last_remaining = u64::MAX;
+                    last_esc_hold = 0;
                     continue;
                 }
-                SessionState::Locked => {}
+                s if s.is_active() => {}
                 _ => {
                     last_remaining = u64::MAX;
+                    last_esc_hold = 0;
                     continue;
                 }
             }
@@ -222,16 +257,8 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
             let Some((elapsed, skew)) = read_timer(&runtime) else {
                 continue;
             };
-
-            let session = {
-                let machine = match runtime.machine.lock() {
-                    Ok(guard) => guard,
-                    Err(_) => continue,
-                };
-                match machine.session().cloned() {
-                    Some(session) => session,
-                    None => continue,
-                }
+            let Some(session) = session_of(&runtime) else {
+                continue;
             };
 
             let remaining = session.target_ms.saturating_sub(elapsed);
@@ -245,7 +272,61 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
                 },
             );
 
-            // 末 10 秒三声轻滴答（PRD F-7.2）：只在跨过阈值的那一次触发
+            // 1) 到点 / 冷却到点：唯一实现处（transition 内部先判剩余）
+            let outcome = transition(&runtime, SessionEvent::Tick, elapsed);
+            match outcome {
+                Ok(Outcome::Settled { result, session }) => {
+                    finish(&app, &runtime, result, &session);
+                    last_snapshot = Instant::now();
+                    last_remaining = u64::MAX;
+                    last_esc_hold = 0;
+                    continue;
+                }
+                Ok(Outcome::CooldownElapsed) => {
+                    begin_challenge(&app, &runtime, elapsed);
+                    continue;
+                }
+                _ => {}
+            }
+
+            // 2) 状态专属心跳
+            if state == SessionState::Locked {
+                let held = hook::esc_hold_ms();
+                if held > 0 || last_esc_hold > 0 {
+                    let _ = app.emit(
+                        "esc://hold",
+                        EscHold {
+                            held_ms: held as i64,
+                        },
+                    );
+                }
+                last_esc_hold = held;
+
+                if held >= ESC_HOLD_TRIGGER_MS {
+                    // 8 秒判定在 Rust：前端卡住也破得了戒（M4 计划 D-27）
+                    let outcome = transition(&runtime, SessionEvent::RequestEmergency, elapsed);
+                    hook::esc_consume();
+                    last_esc_hold = 0;
+                    if matches!(outcome, Ok(Outcome::Confirming)) {
+                        publish_state(&app, &runtime);
+                        ::log::info!("[tick] Esc 按住 {held} ms，进入破戒确认");
+                    }
+                }
+            } else {
+                last_esc_hold = 0;
+            }
+
+            if state == SessionState::Cool {
+                let remain = session.cooldown_remain_ms(elapsed).unwrap_or(0);
+                let _ = app.emit(
+                    "cool://tick",
+                    CoolTick {
+                        remain_ms: remain as i64,
+                    },
+                );
+            }
+
+            // 3) 末 10 秒三声轻滴答（PRD F-7.2）：只在跨过阈值的那一次触发
             if last_remaining != u64::MAX {
                 for (index, threshold) in CHIME_THRESHOLDS.iter().enumerate() {
                     if last_remaining > *threshold && remaining <= *threshold {
@@ -261,22 +342,6 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
             }
             last_remaining = remaining;
 
-            // 到点结算的唯一实现处（core::session::transition 内部先判剩余）
-            let outcome = {
-                let mut machine = match runtime.machine.lock() {
-                    Ok(guard) => guard,
-                    Err(_) => continue,
-                };
-                machine.transition(SessionEvent::Tick, elapsed)
-            };
-
-            if let Ok(Outcome::Settled { result, session }) = outcome {
-                finish(&app, &runtime, result, &session);
-                last_snapshot = Instant::now();
-                last_remaining = u64::MAX;
-                continue;
-            }
-
             if last_snapshot.elapsed() >= SNAPSHOT_INTERVAL {
                 last_snapshot = Instant::now();
                 let _ = runtime
@@ -285,6 +350,64 @@ fn spawn_tick(app: AppHandle, runtime: Arc<Runtime>) {
             }
         }
     });
+}
+
+fn transition(
+    runtime: &Arc<Runtime>,
+    event: SessionEvent,
+    elapsed: u64,
+) -> Result<Outcome, crate::core::session::SessionError> {
+    let mut machine = match runtime.machine.lock() {
+        Ok(guard) => guard,
+        Err(_) => return Err(crate::core::session::SessionError::StateIllegal),
+    };
+    machine.transition(event, elapsed)
+}
+
+fn session_of(runtime: &Arc<Runtime>) -> Option<crate::core::session::SessionInfo> {
+    let machine = runtime.machine.lock().ok()?;
+    machine.session().cloned()
+}
+
+/// 冷却到点 → 抽题 → Challenge。抽不到题就留在 Cool 并提示（绝不变成"可逃脱"）。
+fn begin_challenge(app: &AppHandle, runtime: &Arc<Runtime>, elapsed: u64) {
+    let Some(session) = session_of(runtime) else {
+        return;
+    };
+
+    let needed = cost::question_count(session.attempts, session.question_base);
+    let bank = match runtime.bank.lock() {
+        Ok(guard) => Arc::clone(&guard),
+        Err(_) => return,
+    };
+
+    let mut rng = Rng::from_entropy();
+    let drawn = bank.draw(needed as usize, &mut rng);
+    if drawn.is_empty() {
+        ::log::error!("[bank] 抽不到题（题库为空），保持冷却等待重试");
+        let _ = app.emit(
+            "notice://toast",
+            crate::events::Toast {
+                level: "error",
+                text: "题库为空，无法出题；本次只得继续等待".to_string(),
+            },
+        );
+        return;
+    }
+
+    let round = Round::prepare(drawn, session.attempts, &mut rng);
+    match transition(runtime, SessionEvent::CoolFinished { round }, elapsed) {
+        Ok(Outcome::Challenge) => {
+            publish_state(app, runtime);
+            ::log::info!(
+                "[challenge] 第 {} 次尝试，出 {} 题",
+                session.attempts,
+                needed
+            );
+        }
+        Ok(other) => ::log::warn!("[challenge] 未进入问阵：{other:?}"),
+        Err(err) => ::log::warn!("[challenge] 进入问阵被拒：{err:?}"),
+    }
 }
 
 /// 起势：每 250 ms 推一次剩余毫秒；走满 3 秒后进 Locked 并启动计时器。
@@ -318,15 +441,10 @@ fn step_arming(app: &AppHandle, runtime: &Arc<Runtime>) {
     }
 
     // 起势结束：状态机出口 + 启动计时器 + 首写快照
-    let outcome = {
-        let mut machine = match runtime.machine.lock() {
-            Ok(guard) => guard,
-            Err(_) => return,
-        };
-        machine.transition(SessionEvent::ArmFinished, 0)
-    };
-
-    if !matches!(outcome, Ok(Outcome::Locked)) {
+    if !matches!(
+        transition(runtime, SessionEvent::ArmFinished, 0),
+        Ok(Outcome::Locked)
+    ) {
         ::log::warn!("[tick] 起势结束时状态已不是 Arming，忽略");
         return;
     }
@@ -338,13 +456,7 @@ fn step_arming(app: &AppHandle, runtime: &Arc<Runtime>) {
     let snapshot = build_snapshot(runtime, 0);
     let _ = runtime.io_tx.send(IoJob::Snapshot(snapshot));
 
-    let goal = {
-        let machine = match runtime.machine.lock() {
-            Ok(guard) => guard,
-            Err(_) => return,
-        };
-        machine.session().and_then(|session| session.goal.clone())
-    };
+    let goal = session_of(runtime).and_then(|session| session.goal);
 
     let _ = app.emit(
         "state://changed",
@@ -354,6 +466,7 @@ fn step_arming(app: &AppHandle, runtime: &Arc<Runtime>) {
             goal,
             elapsed_ms: 0,
             target_ms: target_ms as i64,
+            payload: None,
         },
     );
 
@@ -374,7 +487,7 @@ fn step_arming(app: &AppHandle, runtime: &Arc<Runtime>) {
 }
 
 /// 读当前已坚持时长与时间偏差；没有会话（timer 为 None）时返回 None。
-fn read_timer(runtime: &Arc<Runtime>) -> Option<(u64, i64)> {
+pub(crate) fn read_timer(runtime: &Arc<Runtime>) -> Option<(u64, i64)> {
     let guard = runtime.timer.lock().ok()?;
     let timer = guard.as_ref()?;
     Some((timer.elapsed_ms(), timer.skew_min()))
@@ -390,20 +503,30 @@ pub fn build_snapshot(runtime: &Arc<Runtime>, elapsed: u64) -> SessionSnapshot {
         }
     };
 
-    let session = {
+    let (state, session) = {
         let machine = runtime.machine.lock().ok();
-        machine.as_ref().and_then(|m| m.session().cloned())
+        match machine.as_ref() {
+            Some(machine) => (machine.state(), machine.session().cloned()),
+            None => (SessionState::Idle, None),
+        }
     };
 
+    // 快照里的冷却时刻只为便于人工排查；判定仍用单调 elapsed（M4 计划 §3.3）
+    let cooldown_until_ms = session.as_ref().and_then(|session| {
+        session
+            .cooldown_remain_ms(elapsed)
+            .map(|remain| SystemWall.wall_ms() + remain as i64)
+    });
+
     SessionSnapshot {
-        state: SessionState::Locked.as_str().to_string(),
+        state: state.as_str().to_string(),
         target_ms: session.as_ref().map(|s| s.target_ms as i64).unwrap_or(0),
         elapsed_ms: elapsed as i64,
         mono_base,
         wall_base_ms,
         started_at_ms: session.as_ref().map(|s| s.started_at_ms).unwrap_or(0),
         attempts: session.as_ref().map(|s| s.attempts).unwrap_or(0),
-        cooldown_until_ms: None,
+        cooldown_until_ms,
         bank: session
             .as_ref()
             .map(|s| s.bank.clone())

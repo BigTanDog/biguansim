@@ -1,5 +1,6 @@
-//! IPC 命令（TDD §5.1）。M1 只实现三个：bootstrap / start_session / get_state，
-//! M2 起只做加法。
+//! IPC 命令（TDD §5.1）。入关/取消/查询在这里，退出流程的五个命令在 `exit.rs`。
+
+pub mod exit;
 
 use std::sync::Arc;
 
@@ -7,13 +8,14 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::app_state::AppState;
+use crate::core::bank::Bank;
 use crate::core::session::{Outcome, SessionEvent, SessionState};
 use crate::core::store::Config;
 use crate::core::timer::{MonotonicClock, WallClock};
-use crate::events::StateChanged;
+use crate::events::{PhasePayload, StateChanged};
 use crate::platform::time::{SystemMonotonic, SystemWall};
 use crate::platform::{hook, overlay};
-use crate::runtime::Runtime;
+use crate::runtime::{current_payload, Runtime};
 
 const MIN_DURATION_MIN: u32 = 15;
 const MAX_DURATION_MIN: u32 = 480;
@@ -51,6 +53,8 @@ pub struct StateView {
     bank: String,
     attempts: u32,
     clock_skew_min: i64,
+    /// 活跃态投影（冷却/问阵/抄写/确认）；其余状态为 None
+    payload: Option<PhasePayload>,
 }
 
 #[tauri::command]
@@ -86,6 +90,19 @@ pub fn start_session(
     let now_ms = SystemWall.wall_ms();
     let now_mono_ms = SystemMonotonic.unbiased_ms();
     let bank = bank_id.unwrap_or_else(|| "basic".to_string());
+    // 成本基数在入关时固化进会话：状态机因此不必读文件，也不会中途被改配置影响
+    let mut config = runtime.store.load_config();
+
+    // 题库在入关时重载一次（用户可能刚手动改过），且**空题库绝不允许入关**：
+    // 否则到时会出现"无题可问"却已经锁住用户的局面（PRD §12）
+    let loaded = Bank::load(runtime.store.root());
+    if loaded.is_empty() {
+        log::error!("[ipc] 题库为空，拒绝入关（E_BANK_INVALID）");
+        return Err("E_BANK_INVALID: 题库为空或无法解析".to_string());
+    }
+    if let Ok(mut guard) = runtime.bank.lock() {
+        *guard = Arc::new(loaded);
+    }
 
     // Idle/Settled → Arming。真正进入 Locked 由 tick 线程在 3 秒后完成（PRD F-2.1）
     let (session_id, target_ms) = {
@@ -101,6 +118,8 @@ pub fn start_session(
                 now_mono_ms,
                 goal: goal.clone(),
                 bank,
+                cooldown_base: config.cooldown_base,
+                question_base: config.question_base,
             },
             0,
         ) {
@@ -147,11 +166,11 @@ pub fn start_session(
             goal,
             elapsed_ms: 0,
             target_ms: target_ms as i64,
+            payload: None,
         },
     );
 
     // 「再入一关」要预填上次时长（F-7.6）：把这次的时长写回 config
-    let mut config = runtime.store.load_config();
     if config.last_duration_min != duration_min {
         config.last_duration_min = duration_min;
         if let Err(err) = runtime.store.save_config(&config) {
@@ -197,6 +216,7 @@ pub fn cancel_arming(
             goal: None,
             elapsed_ms: 0,
             target_ms: 0,
+            payload: None,
         },
     );
 
@@ -238,6 +258,7 @@ pub fn get_state(runtime: State<'_, Arc<Runtime>>) -> StateView {
             .unwrap_or_else(|| "basic".to_string()),
         attempts: session.as_ref().map(|s| s.attempts).unwrap_or(0),
         clock_skew_min: skew,
+        payload: current_payload(&runtime),
     }
 }
 
@@ -272,6 +293,7 @@ pub fn dev_abort(
             goal: None,
             elapsed_ms: 0,
             target_ms: 0,
+            payload: None,
         },
     );
 

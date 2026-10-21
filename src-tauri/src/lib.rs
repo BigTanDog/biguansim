@@ -51,6 +51,11 @@ pub fn run() {
         commands::start_session,
         commands::cancel_arming,
         commands::get_state,
+        commands::exit::request_unlock,
+        commands::exit::submit_choice,
+        commands::exit::submit_copy,
+        commands::exit::confirm_emergency,
+        commands::exit::cancel_emergency,
         commands::dev_abort
     ]);
 
@@ -59,7 +64,12 @@ pub fn run() {
         commands::bootstrap,
         commands::start_session,
         commands::cancel_arming,
-        commands::get_state
+        commands::get_state,
+        commands::exit::request_unlock,
+        commands::exit::submit_choice,
+        commands::exit::submit_copy,
+        commands::exit::confirm_emergency,
+        commands::exit::cancel_emergency
     ]);
 
     builder
