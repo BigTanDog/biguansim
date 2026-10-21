@@ -42,6 +42,8 @@ export const useSessionStore = defineStore('session', () => {
   const clockSkewMin = ref(0)
   const goal = ref<string | null>(null)
   const bank = ref('basic')
+  const bankName = ref('基础阵法')
+  const bankTotal = ref(0)
   const result = ref<string | null>(null)
   const lastSession = ref<ipc.LastSession | null>(null)
   const lastError = ref<string | null>(null)
@@ -123,6 +125,9 @@ export const useSessionStore = defineStore('session', () => {
     try {
       const boot = await ipc.bootstrap()
       config.value = boot.config
+      bank.value = boot.bank.id || 'basic'
+      bankName.value = boot.bank.name || '基础阵法'
+      bankTotal.value = boot.bank.total
       lastSession.value = boot.lastSession
       applyState(await ipc.getState())
 
@@ -308,6 +313,8 @@ export const useSessionStore = defineStore('session', () => {
     clockSkewMin,
     goal,
     bank,
+    bankName,
+    bankTotal,
     result,
     lastSession,
     lastDurationMin,

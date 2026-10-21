@@ -7,6 +7,8 @@ const PRESETS = [25, 45, 60, 90, 120, 180] as const
 const MIN_MINUTES = 15
 const MAX_MINUTES = 480
 const GOAL_MAX_LEN = 24
+/** 题库总数低于这个数才出"阵法简陋"黄字（PRD F-8.3 / A-16） */
+const THIN_BANK_THRESHOLD = 30
 
 const store = useSessionStore()
 const duration = ref(120)
@@ -24,6 +26,7 @@ watch(
 )
 
 const validDuration = computed(() => duration.value >= MIN_MINUTES && duration.value <= MAX_MINUTES)
+const thinBank = computed(() => store.bankTotal > 0 && store.bankTotal < THIN_BANK_THRESHOLD)
 
 async function submit(): Promise<void> {
   if (!validDuration.value || store.busy) {
@@ -78,7 +81,10 @@ function pick(preset: number): void {
 
     <section class="card">
       <h2 class="card__title">阵法</h2>
-      <p class="bank">基础阵法 · 60 题（M1 尚未接入题库，题面与判分在 M4 就位）</p>
+      <p class="bank">
+        {{ store.bankName }} · 可抽 {{ store.bankTotal }} 题 / 共 {{ store.bankTotal }} 题
+      </p>
+      <p v-if="thinBank" class="bank-warn">阵法简陋（共 {{ store.bankTotal }} 题），易被强破</p>
       <label class="custom">
         <span class="custom__label">本次目标（非必填，最多 {{ GOAL_MAX_LEN }} 字）</span>
         <input
@@ -99,8 +105,9 @@ function pick(preset: number): void {
     </button>
 
     <p class="footnote">
-      当前版本：结界已接入键盘拦截，但长按 Esc
-      破戒的流程尚未接上（M4）。闭关中如需退出，请用任务管理器结束进程（会记为「异常中断」）。
+      闭关中可点右下角「解开阵法」退出：先冷却，再答问阵，全对方可出关；第 3
+      次起还要抄写。遇急事可长按 Esc 八秒走破戒通道（记为一次破戒）。Ctrl+Alt+Del 与 Win
+      键拦不住，详见「关于」页的已知局限。
     </p>
   </main>
 </template>
@@ -198,6 +205,13 @@ function pick(preset: number): void {
 
 .bank {
   font-size: 13px;
+}
+
+/* 黄字只在"题库总数 < 30"时出现；可抽数少是勤奋的结果，不算简陋（F-8.3） */
+.bank-warn {
+  margin-top: 6px;
+  color: #c9a227;
+  font-size: 11px;
 }
 
 .enter {

@@ -19,8 +19,16 @@ export interface LastSession {
   startedAtMs: number
 }
 
+export interface BankInfo {
+  id: string
+  name: string
+  /** 题库总题数（记忆衰减接入后，可抽题数会小于它） */
+  total: number
+}
+
 export interface BootstrapView {
   config: Config
+  bank: BankInfo
   /** 上次异常中断的会话；正常启动为 null */
   lastSession: LastSession | null
 }

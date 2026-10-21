@@ -27,10 +27,21 @@ pub struct LastSessionView {
     started_at_ms: i64,
 }
 
+/// 题库概况：配置页要显示"可抽 X 题 / 共 Y 题"，且总数 < 30 时必须出黄字（F-1.2 / F-8.3）。
+/// 数字由 Rust 给出，前端不写死。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankView {
+    id: String,
+    name: String,
+    total: usize,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapView {
     config: Config,
+    bank: BankView,
     /// 上次异常中断的会话（本次启动时已记入记录）；正常启动为 None
     last_session: Option<LastSessionView>,
 }
@@ -67,8 +78,22 @@ pub fn bootstrap(runtime: State<'_, Arc<Runtime>>) -> BootstrapView {
         })
     });
 
+    let bank = match runtime.bank.lock() {
+        Ok(bank) => BankView {
+            id: bank.id.clone(),
+            name: bank.name.clone(),
+            total: bank.len(),
+        },
+        Err(_) => BankView {
+            id: "basic".to_string(),
+            name: "基础阵法".to_string(),
+            total: 0,
+        },
+    };
+
     BootstrapView {
         config,
+        bank,
         last_session,
     }
 }
