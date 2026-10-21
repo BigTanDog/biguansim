@@ -76,8 +76,13 @@ pub struct SessionInfo {
     /// 冷却基数（分钟）与题数基数，入关时从 `config.json` 带入，避免状态机读文件
     pub cooldown_base: u32,
     pub question_base: u32,
+    /// 冷却缩放：正式版 1，测试版 10（5 分钟 → 30 秒）。
+    /// 只影响冷却时长，不影响题数/抄写字数——为了让自测能在一个短会话里走到第 3 轮。
+    pub cost_scale: u32,
     /// 冷却结束时的 `elapsed` 读数。用单调口径而不是墙钟：改系统时间不能缩短冷却。
     pub cool_end_elapsed_ms: Option<u64>,
+    /// 本轮冷却的总时长（已缩放），投影直接用它，避免前端自己算
+    pub cool_ms: u64,
     pub round: Option<Round>,
     pub copy: Option<CopyTask>,
 }
@@ -118,6 +123,7 @@ pub enum SessionEvent {
         bank: String,
         cooldown_base: u32,
         question_base: u32,
+        cost_scale: u32,
     },
     /// Arming → Locked（3 秒走完）
     ArmFinished,
@@ -179,10 +185,11 @@ pub enum Outcome {
     CopyMismatch { index: usize },
     /// 进入破戒确认
     Confirming,
-    /// 离开活跃态，需要执行 teardown
+    /// 离开活跃态，需要执行 teardown。
+    /// `session` 装箱：`SessionInfo` 带着题目与抄写任务，直接内联会让整个枚举变胖。
     Settled {
         result: SessionResult,
-        session: SessionInfo,
+        session: Box<SessionInfo>,
     },
 }
 
@@ -246,6 +253,7 @@ impl SessionMachine {
                 bank,
                 cooldown_base,
                 question_base,
+                cost_scale,
             } => {
                 if self.state.is_active() || self.state == SessionState::Arming {
                     return Err(SessionError::StateIllegal);
@@ -263,7 +271,9 @@ impl SessionMachine {
                     armed_at_mono_ms: now_mono_ms,
                     cooldown_base,
                     question_base,
+                    cost_scale: cost_scale.max(1),
                     cool_end_elapsed_ms: None,
+                    cool_ms: 0,
                     round: None,
                     copy: None,
                 });
@@ -317,7 +327,7 @@ impl SessionMachine {
                 };
 
                 let next_attempt = session.attempts.saturating_add(1);
-                let need = cost::cooldown_ms(next_attempt, session.cooldown_base);
+                let need = cooldown_of(session, next_attempt);
                 let remaining = session.remaining_ms();
                 if remaining < need {
                     return Ok(Outcome::UnlockRefused {
@@ -328,6 +338,7 @@ impl SessionMachine {
 
                 session.attempts = next_attempt;
                 session.cool_end_elapsed_ms = Some(elapsed_ms.saturating_add(need));
+                session.cool_ms = need;
                 self.state = SessionState::Cool;
                 Ok(Outcome::Cool {
                     attempt: next_attempt,
@@ -362,6 +373,16 @@ impl SessionMachine {
                 let Some(session) = self.session.as_mut() else {
                     return Err(SessionError::StateIllegal);
                 };
+
+                // **先确认抄写原文在，再动题目**：`Round::submit` 会推进题号，
+                // 先提交再报错就回滚不了，会留下"状态 Challenge、题号已越界"的死态
+                // （2026-10-21 审阅指出）。语料缺失属于构建缺陷，直接拒绝本次作答。
+                let needs_copy = cost::copy_chars(session.attempts) > 0;
+                if needs_copy && copy.is_none() {
+                    ::log::error!("[session] 需要抄写却没有原文，拒绝本次作答（语料构建缺陷）");
+                    return Err(SessionError::CopyMissing);
+                }
+
                 let Some(round) = session.round.as_mut() else {
                     return Err(SessionError::StateIllegal);
                 };
@@ -373,8 +394,9 @@ impl SessionMachine {
                         // F-5.5 / F-5.7：不公布答案，成本 +1，回冷却
                         session.round = None;
                         session.attempts = session.attempts.saturating_add(1);
-                        let need = cost::cooldown_ms(session.attempts, session.cooldown_base);
+                        let need = cooldown_of(session, session.attempts);
                         session.cool_end_elapsed_ms = Some(elapsed_ms.saturating_add(need));
+                        session.cool_ms = need;
                         self.state = SessionState::Cool;
                         Ok(Outcome::Cool {
                             attempt: session.attempts,
@@ -384,17 +406,19 @@ impl SessionMachine {
                     Judgement::AllCorrect => {
                         let target_chars = cost::copy_chars(session.attempts);
                         session.round = None;
+
                         if target_chars == 0 {
                             return Ok(self.settle(SessionResult::Early));
                         }
-                        match copy {
-                            Some(task) => {
-                                session.copy = Some(task);
-                                self.state = SessionState::Copying;
-                                Ok(Outcome::Copying { target_chars })
-                            }
-                            None => Err(SessionError::CopyMissing),
-                        }
+
+                        // 上面已经拦过"需要抄写却没原文"，这里不可能为空
+                        let Some(task) = copy else {
+                            return Err(SessionError::CopyMissing);
+                        };
+
+                        session.copy = Some(task);
+                        self.state = SessionState::Copying;
+                        Ok(Outcome::Copying { target_chars })
                     }
                 }
             }
@@ -468,8 +492,18 @@ impl SessionMachine {
         session.elapsed_ms = session.elapsed_ms.min(session.target_ms);
         session.round = None;
         session.copy = None;
-        Outcome::Settled { result, session }
+        Outcome::Settled {
+            result,
+            session: Box::new(session),
+        }
     }
+}
+
+/// 本次尝试的冷却时长（已按 `cost_scale` 缩放，且不低于 1 秒）。
+/// 缩放只用于 debug 构建自测，正式版 `cost_scale = 1`。
+fn cooldown_of(session: &SessionInfo, attempt: u32) -> u64 {
+    let raw = cost::cooldown_ms(attempt, session.cooldown_base);
+    (raw / u64::from(session.cost_scale.max(1))).max(1_000)
 }
 
 #[cfg(test)]

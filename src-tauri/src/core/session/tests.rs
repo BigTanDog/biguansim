@@ -22,6 +22,8 @@ fn start(machine: &mut SessionMachine, duration_ms: u64) {
                 bank: "basic".to_string(),
                 cooldown_base: 5,
                 question_base: 3,
+                // 单测按正式版口径（不缩放冷却），否则断言的 5/10/15 分钟都会变
+                cost_scale: 1,
             },
             0,
         )
@@ -150,6 +152,7 @@ fn start_while_arming_is_illegal() {
                 bank: "basic".to_string(),
                 cooldown_base: 5,
                 question_base: 3,
+                cost_scale: 1,
             },
             0,
         )
@@ -173,6 +176,7 @@ fn start_while_locked_is_illegal() {
                 bank: "basic".to_string(),
                 cooldown_base: 5,
                 question_base: 3,
+                cost_scale: 1,
             },
             0,
         )
@@ -197,6 +201,7 @@ fn start_while_cool_is_illegal() {
                 bank: "basic".to_string(),
                 cooldown_base: 5,
                 question_base: 3,
+                cost_scale: 1,
             },
             0,
         )
@@ -593,6 +598,23 @@ fn copy_missing_is_error_not_free_exit() {
 
     assert_eq!(err, SessionError::CopyMissing);
     assert_eq!(m.state(), SessionState::Challenge, "不得因此出关");
+    // 回归：报错时题目必须还在，否则会留下"状态 Challenge、题目已空"的死态
+    assert!(
+        m.session().unwrap().round.is_some(),
+        "报错后题目不得被清空（过去的顺序会留下无题可答的死态）"
+    );
+    assert_eq!(
+        m.transition(
+            SessionEvent::SubmitChoice {
+                choice: 0,
+                copy: Some(copy_task()),
+            },
+            800_000
+        )
+        .map(|_| ()),
+        Ok(()),
+        "补上原文后应能正常继续，而不是一直 E_INVALID_CHOICE"
+    );
 }
 
 #[test]

@@ -51,6 +51,12 @@ static HOOK_TID: AtomicU32 = AtomicU32::new(0);
 static ESC_BITS: AtomicU64 = AtomicU64::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static SUPERVISOR_STARTED: AtomicBool = AtomicBool::new(false);
+/// 待办动作：回调里**只置标志**，真正的阻塞调用（锁屏、发 toast）由专用线程做。
+/// `LockWorkStation()` 要切安全桌面，耗时可达数百毫秒；在回调里做会拖过
+/// `LowLevelHooksTimeout`，钩子被系统静默摘除——之后所有按键放行。
+static PENDING_LOCK: AtomicBool = AtomicBool::new(false);
+static PENDING_TOAST: AtomicBool = AtomicBool::new(false);
+static ACTIONS_STARTED: AtomicBool = AtomicBool::new(false);
 static APP: OnceLock<AppHandle> = OnceLock::new();
 
 fn mono_ms() -> u64 {
@@ -139,6 +145,7 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
     match rx.recv_timeout(Duration::from_secs(3)) {
         Ok(Ok(())) => {
             spawn_supervisor();
+            spawn_actions();
             ::log::info!("[hook] 键盘钩子已安装");
             Ok(())
         }
@@ -201,7 +208,8 @@ fn io_loop(mut hook: isize) -> Result<(), String> {
                 }
                 Err(err) => {
                     ::log::warn!("[hook] 重装失败，继续使用旧钩子：{err}");
-                    toast("键盘拦截重装失败，已保留旧钩子");
+                    // toast 会走 IPC，不能在这个消息循环线程里做（会堵住钩子回调的投递）
+                    PENDING_TOAST.store(true, Ordering::Relaxed);
                 }
             }
         }
@@ -210,6 +218,30 @@ fn io_loop(mut hook: isize) -> Result<(), String> {
     // SAFETY: 卸载自己安装的钩子
     unsafe { UnhookWindowsHookEx(hook as *mut _) };
     Ok(())
+}
+
+/// 专用动作线程（**全进程只有一个**）：把"回调里不能做"的阻塞动作搬出来。
+///
+/// 为什么不用 channel：`Sender::send` 内部有锁与分配，回调里同样不许。
+/// 50 ms 轮询，空闲时几乎不耗 CPU；`PENDING_*` 都是原子标志，回调侧只 store。
+fn spawn_actions() {
+    if ACTIONS_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    thread::spawn(|| loop {
+        thread::sleep(Duration::from_millis(50));
+
+        if PENDING_LOCK.swap(false, Ordering::SeqCst) {
+            // SAFETY: 锁定当前工作站；失败也只是没锁上，结界仍在
+            unsafe { LockWorkStation() };
+            ::log::info!("[hook] 已代劳 Win+L 锁屏");
+        }
+
+        if PENDING_TOAST.swap(false, Ordering::SeqCst) {
+            toast("键盘拦截重装失败，已保留旧钩子");
+        }
+    });
 }
 
 /// 常驻监督线程（**全进程只有一个**）：每秒用真实键态校正状态机，每 60 s 触发重装。
@@ -320,10 +352,10 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     let verdict = decide(vk, is_down, &mut state);
     MODS.store(encode(&state), Ordering::Relaxed);
 
-    // Win+L 被整体吞掉了，锁屏得我们自己来（F-3.4）
+    // Win+L 被整体吞掉了，锁屏得我们自己来（F-3.4）。
+    // **不能在这里直接调**：切安全桌面可能耗时数百毫秒，回调超时会让钩子被系统摘除。
     if wants_lock(vk, is_down, win_down) {
-        // SAFETY: 锁定当前工作站，无副作用
-        unsafe { LockWorkStation() };
+        PENDING_LOCK.store(true, Ordering::Relaxed);
     }
 
     match verdict {
