@@ -14,9 +14,9 @@ use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, PostThreadMessageW,
-    SetForegroundWindow, SetTimer, EVENT_SYSTEM_FOREGROUND, MSG, WINEVENT_OUTOFCONTEXT, WM_QUIT,
-    WM_TIMER,
+    GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, IsIconic, PostThreadMessageW,
+    SetForegroundWindow, SetTimer, ShowWindow, EVENT_SYSTEM_FOREGROUND, MSG, SW_RESTORE,
+    WINEVENT_OUTOFCONTEXT, WM_QUIT, WM_TIMER,
 };
 
 /// 兜底复查周期（TDD §4.5 的"降频到 500 ms 重试"）
@@ -32,6 +32,8 @@ static OUR_PID: AtomicU32 = AtomicU32::new(0);
 static FAILURES: AtomicI32 = AtomicI32::new(0);
 /// 已经为第几次连续失败打过日志，避免刷屏
 static WARNED_AT: AtomicI32 = AtomicI32::new(0);
+/// 从最小化状态还原的次数（回调里只累加，日志留到定时器里打）
+static RESTORES: AtomicI32 = AtomicI32::new(0);
 
 fn our_pid() -> u32 {
     if OUR_PID.load(Ordering::Relaxed) == 0 {
@@ -121,6 +123,26 @@ pub fn stop() {
 
 /// 把前台抢回我们的窗口。返回是否成功；调用方负责计数与日志。
 fn try_reclaim() -> bool {
+    let target = TARGET.load(Ordering::Relaxed) as HWND;
+    if target.is_null() {
+        return true;
+    }
+
+    // 「显示桌面」（Win+D）会把窗口最小化，而**最小化的窗口仍可能被记为前台**，
+    // 于是下面"前台 pid 是本进程 → 已抢回"的判定会把这种情况当成正常，
+    // 结果是桌面可见、键盘仍被钩子吞掉——2026-10-20 实测的"必须杀进程"就是这个。
+    // 顺序不能改：必须先还原，再比 pid。
+    // SAFETY: 只查询自己窗口的状态
+    if unsafe { IsIconic(target) } != 0 {
+        // SAFETY: 还原并置前自己的窗口；失败也无害，500 ms 的兜底会再试
+        unsafe {
+            ShowWindow(target, SW_RESTORE);
+            SetForegroundWindow(target);
+        }
+        RESTORES.fetch_add(1, Ordering::Relaxed);
+        return true;
+    }
+
     // SAFETY: 只读当前前台窗口
     let foreground = unsafe { GetForegroundWindow() };
     if foreground.is_null() {
@@ -132,11 +154,6 @@ fn try_reclaim() -> bool {
     unsafe { GetWindowThreadProcessId(foreground, &mut pid) };
 
     if pid == our_pid() {
-        return true;
-    }
-
-    let target = TARGET.load(Ordering::Relaxed) as HWND;
-    if target.is_null() {
         return true;
     }
 
@@ -180,6 +197,11 @@ fn note_result(ok: bool) -> i32 {
 
 /// 定时器里做的事：复查 + 打日志（这里不是钩子回调，允许 IO）
 fn retry_once() {
+    let restores = RESTORES.swap(0, Ordering::Relaxed);
+    if restores > 0 {
+        ::log::warn!("[focus] 窗口曾被最小化（显示桌面），已还原 {restores} 次");
+    }
+
     let failures = note_result(try_reclaim());
     if failures >= WARN_AFTER_FAILURES && WARNED_AT.swap(failures, Ordering::Relaxed) != failures {
         ::log::warn!("[focus] 连续 {failures} 次抢回失败，继续每 {RETRY_INTERVAL_MS} ms 重试");

@@ -114,11 +114,20 @@ pub fn unlock_screen(app: &AppHandle) {
 
 /// 任务栏本身也是 topmost，只在创建时置顶会被压回去；
 /// Locked 期间每 1 s 重申一次（TDD §4.3）。
+///
+/// **同时兜住"显示桌面"（`Win+D`）**：它会把窗口最小化，只重申 topmost 是没用的，
+/// 桌面照样露出来。2026-10-20 实测过这个故障（桌面可见 + 键盘仍被吞 → 只能杀进程），
+/// 所以这里必须每秒检查一次最小化并还原。
 fn spawn_topmost_keeper(app: AppHandle) {
     thread::spawn(move || {
         while app.state::<AppState>().is_locked() {
             for (label, window) in app.webview_windows() {
                 if label == MAIN_LABEL || label.starts_with(SECONDARY_PREFIX) {
+                    if window.is_minimized().unwrap_or(false) {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        log::warn!("[overlay] 窗口被最小化（显示桌面？），已还原：{label}");
+                    }
                     let _ = window.set_always_on_top(true);
                 }
             }

@@ -29,6 +29,15 @@ export const useSessionStore = defineStore('session', () => {
 
   const lastDurationMin = computed(() => config.value?.lastDurationMin ?? 120)
 
+  /** 顶部提示条：Rust 推来的 toast 与前端自身的失败提示共用一条通道 */
+  function notify(level: string, text: string): void {
+    toast.value = { level, text }
+    window.clearTimeout(toastTimer)
+    toastTimer = window.setTimeout(() => {
+      toast.value = null
+    }, 4_000)
+  }
+
   const progress = computed(() => {
     if (targetMs.value <= 0) {
       return 0
@@ -75,11 +84,7 @@ export const useSessionStore = defineStore('session', () => {
       })
 
       await ipc.onToast((incoming) => {
-        toast.value = incoming
-        window.clearTimeout(toastTimer)
-        toastTimer = window.setTimeout(() => {
-          toast.value = null
-        }, 4_000)
+        notify(incoming.level, incoming.text)
       })
 
       await ipc.onChime((chime) => {
@@ -182,6 +187,7 @@ export const useSessionStore = defineStore('session', () => {
     lastDurationMin,
     toast,
     progress,
+    notify,
     init,
     start,
     cancelArming,

@@ -15,7 +15,9 @@ const isMirror = getCurrentWindow().label !== 'main'
 const devMode = import.meta.env.DEV
 
 function devExit(): void {
-  void ipc.devAbort()
+  ipc.devAbort().catch((err: unknown) => {
+    store.notify('error', `DEV 退出失败：${String(err)}`)
+  })
 }
 
 const RADIUS = 92
@@ -203,16 +205,24 @@ const clockSuspect = computed(() => Math.abs(store.clockSkewMin) > SKEW_THRESHOL
   color: #d4695f;
 }
 
+/* 开发期唯一可靠的退出口：鼠标路径不经过键盘钩子。
+   2026-10-20 实测键盘组合键可能被系统热键吃掉，所以这里必须显眼、可点。 */
 .dev-exit {
   position: absolute;
   right: 16px;
-  bottom: 30px;
-  padding: 4px 10px;
-  border: 1px dashed #6b6357;
+  bottom: 34px;
+  padding: 8px 16px;
+  border: 1px solid #8c8375;
   border-radius: var(--radius-btn);
-  background: transparent;
-  color: #8c8375;
-  font-size: 11px;
+  background: rgba(20, 17, 14, 0.9);
+  color: #c9b99a;
+  font-size: 12px;
   cursor: pointer;
+  z-index: 5;
+}
+
+.dev-exit:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 </style>

@@ -93,6 +93,14 @@ pub fn esc_hold_ms() -> u64 {
     mono_ms().saturating_sub(down)
 }
 
+/// 消费一次 Esc 长按：清零并要求**重新按下**才重新计时（PRD F-6.4 的"进度清零"）。
+///
+/// 为什么需要：取消破戒（或触发后）Esc 往往还按着，若不清零，切回 Locked 的
+/// 下一个 tick 会立刻再次满足 8 秒条件，形成"取消 → 又弹出"的死循环。
+pub fn esc_consume() {
+    ESC_DOWN_MS.store(0, Ordering::SeqCst);
+}
+
 /// 装钩子。失败必须让调用方拒绝入关（PRD D-7）。
 pub fn install(app: &AppHandle) -> Result<(), String> {
     let _ = APP.set(app.clone());

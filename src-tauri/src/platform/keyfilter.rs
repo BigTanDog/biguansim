@@ -80,6 +80,16 @@ pub fn decide(vk: u16, is_down: bool, state: &mut ModState) -> Verdict {
         _ => {}
     }
 
+    // 1.5 开发期逃生组合键：显式放行，且**排在所有吞键分支之前**。
+    // 只在 debug 构建存在；release 里这段代码根本编不进去。
+    // 为什么单独列一条而不是"靠分支自然放行"：`Ctrl+Alt+Shift+X` 里的 Alt+Shift
+    // 是系统的输入法切换热键，可能先被系统吃掉（2026-10-20 实测失效，原因未定论），
+    // 换成不含 Alt 的 `Ctrl+Shift+F12` 可绕开；两条都保留。
+    #[cfg(debug_assertions)]
+    if dev_exit_combo(vk, state) {
+        return Verdict::Pass;
+    }
+
     // 2. Win 键：按下与抬起都吞掉。
     //
     // 这里踩过一个把键盘弄"半死"的坑（2026-10-20 实测）：早先"按下放行、抬起吞掉"
@@ -118,6 +128,15 @@ pub fn decide(vk: u16, is_down: bool, state: &mut ModState) -> Verdict {
     }
 
     Verdict::Pass
+}
+
+/// 开发期逃生组合键（**只在 debug 构建**）：`Ctrl+Shift+F12` 或 `Ctrl+Alt+Shift+X`。
+#[cfg(debug_assertions)]
+fn dev_exit_combo(vk: u16, state: &ModState) -> bool {
+    const VK_X: u16 = 0x58;
+    const VK_F12: u16 = 0x7B;
+    (vk == VK_F12 && state.ctrl && state.shift)
+        || (vk == VK_X && state.ctrl && state.alt && state.shift)
 }
 
 /// 是否要替系统执行"锁屏"：`Win+L` 被我们整体吞掉后，由 hook 线程主动调用
@@ -322,6 +341,26 @@ mod tests {
         assert_eq!(press(&mut st, 0x20), Verdict::Pass);
         release(&mut st, VK_CONTROL);
         assert_eq!(press(&mut st, VK_SHIFT), Verdict::Pass);
+    }
+
+    /// 开发期逃生组合键必须放行：否则闭关中无法退出，只能杀进程
+    #[cfg(debug_assertions)]
+    #[test]
+    fn dev_exit_combo_passes_through() {
+        let mut st = ModState::default();
+        press(&mut st, VK_CONTROL);
+        press(&mut st, VK_SHIFT);
+        assert_eq!(press(&mut st, 0x7B), Verdict::Pass, "Ctrl+Shift+F12");
+
+        let mut st = ModState::default();
+        press(&mut st, VK_CONTROL);
+        press(&mut st, VK_MENU);
+        press(&mut st, VK_SHIFT);
+        assert_eq!(press(&mut st, 0x58), Verdict::Pass, "Ctrl+Alt+Shift+X");
+
+        // 只有 F12 单独按（不带修饰键）仍按普通键处理，不引入额外吞键
+        let mut st = ModState::default();
+        assert_eq!(press(&mut st, 0x7B), Verdict::Pass, "F12");
     }
 
     #[test]

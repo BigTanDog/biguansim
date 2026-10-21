@@ -13,14 +13,28 @@ const store = useSessionStore()
 /** 开发期逃生口：只有 dev 构建才挂，正式产物里既没有命令也没有这个监听 */
 const DEV = import.meta.env.DEV
 
+/**
+ * 两条组合键：`Ctrl+Shift+F12` 与 `Ctrl+Alt+Shift+X`。
+ * 后者的 Alt+Shift 是系统输入法切换热键，可能先被系统吃掉（2026-10-20 实测失效），
+ * 所以前者是主用、后者兼容旧习惯；闭关页还常驻一个可见按钮作为最后手段。
+ */
+function isDevExitCombo(event: KeyboardEvent): boolean {
+  const f12 = event.ctrlKey && event.shiftKey && !event.altKey && event.code === 'F12'
+  const x = event.ctrlKey && event.altKey && event.shiftKey && event.code === 'KeyX'
+  return f12 || x
+}
+
 function onDevKeydown(event: KeyboardEvent): void {
-  if (!DEV) {
+  if (!DEV || !isDevExitCombo(event)) {
     return
   }
-  if (event.ctrlKey && event.altKey && event.shiftKey && event.code === 'KeyX') {
-    event.preventDefault()
-    void ipc.devAbort()
-  }
+  event.preventDefault()
+  ipc
+    .devAbort()
+    .catch((err: unknown) => {
+      // 静默失败过一次（2026-10-20 按键退出无效却没有任何提示），必须看得见
+      store.notify('error', `DEV 退出失败：${String(err)}`)
+    })
 }
 
 /** 闭关期间屏蔽刷新类快捷键与右键菜单（TDD §5.4） */
