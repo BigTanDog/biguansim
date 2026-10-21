@@ -14,6 +14,17 @@ pub fn run() {
     platform::log::init();
     ::log::info!("启动 biguansim {}", env!("CARGO_PKG_VERSION"));
 
+    // 不带 `custom-protocol` feature 的构建会去连 `devUrl`（默认 localhost:1420），
+    // 单独双击就只剩"拒绝连接"的白屏。`cargo build` / `cargo test` 产出的
+    // `target/debug/biguansim.exe` 正是这种（2026-10-21 踩过：构建完之后跑了一次
+    // `cargo test`，把能独立运行的测试版覆盖成了要连 Vite 的版本）。
+    if tauri::is_dev() {
+        ::log::warn!(
+            "[boot] 这是 dev 构建（无 custom-protocol）：窗口将连接 devUrl，需要 Vite。\
+             要独立运行请用 `pnpm tauri build --debug`"
+        );
+    }
+
     // 熄屏唤醒后 WebView2 默认会先判"窗口不可见"而暂停渲染，回来是白屏再跳数。
     // 关掉遮挡检测才能满足 U-7 的"1 秒内正确重绘"。
     // 注意：该变量必须在 WebView2 首次初始化之前设置。

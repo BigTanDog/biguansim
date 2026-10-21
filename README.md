@@ -32,6 +32,13 @@ pnpm tauri build      # 产出 src-tauri/target/release/biguansim.exe
 > `pnpm tauri build` 才会产出新 exe。判断手上这份是不是新的，看两处——文件时间，以及启动后
 > `%APPDATA%\闭关模拟器\logs\biguansim.log` 里有没有 `[bank] 已加载题库 …` 这一行（M4 起才有）。
 
+> **`cargo build` / `cargo test` 会覆盖 `target\debug\biguansim.exe`，把它变成"要连 Vite"的版本**：
+> 只有 Tauri CLI（`tauri build` / `tauri build --debug`）会给 `tauri` crate 加 `custom-protocol`
+> feature，从而内嵌前端；裸 `cargo` 构建没有这个 feature，窗口会去连 `devUrl` 并显示
+> `localhost 拒绝连接`。**顺序上必须把 `tauri build` 放在所有 `cargo test`/`clippy` 之后**，
+> 否则最后留下的就是坏产物（2026-10-21 踩过）。这种构建启动时会在日志里打
+> `[boot] 这是 dev 构建（无 custom-protocol）…`。
+
 自动化检查（提交前必须全绿，逐条对应 AGENTS §1）：
 
 ```bash

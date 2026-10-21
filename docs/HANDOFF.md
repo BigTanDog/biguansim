@@ -180,6 +180,7 @@ src-tauri/src/
 | 坑 | 现象 | 解法 |
 |---|---|---|
 | **拿旧 exe 当新版本** | `target/release/biguansim.exe` 是上次 `tauri build` 的产物，改完代码不重跑就还是旧的（2026-10-21 实测踩过：以为 M4 没生效，其实跑的是 M3 的 exe） | 每次改完先看文件时间；启动后查日志有没有 `[bank] 已加载题库 …`（M4 起才有）。`Start-Process` 必须给 `-WorkingDirectory`，否则报"文件名、目录名或卷标语法不正确" |
+| **`cargo test` 把可独立运行的 exe 覆盖成连 Vite 的版本** | 裸 `cargo` 构建没有 `custom-protocol` feature，窗口去连 `devUrl`，双击只看到 `localhost 拒绝连接`（2026-10-21 踩过：构建完又跑了一次 `cargo test`，交付的 debug 产物就白了） | 把 `tauri build [--debug]` 放在所有 `cargo test`/`clippy` **之后**；启动日志出现 `[boot] 这是 dev 构建（无 custom-protocol）` 就是坏的 |
 | 管道吞掉退出码 | `pnpm verify \| rg …` 拿到的是 rg 的 0，误以为门禁绿 | 用 `Out-String` 后单独取 `$LASTEXITCODE` |
 | Vite 监视 `src-tauri` | dev 启动报 `EBUSY … biguansim_lib.dll`，整个 dev 崩掉 | `vite.config.ts` 里 `server.watch.ignored: ['**/src-tauri/**']` |
 | debug 版依赖 Vite | 单独双击 debug exe 显示"localhost 拒绝连接" | 用 `pnpm tauri dev`，或跑 release 产物 |
