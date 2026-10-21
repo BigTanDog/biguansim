@@ -139,6 +139,79 @@ fn dev_exit_combo(vk: u16, state: &ModState) -> bool {
         || (vk == VK_X && state.ctrl && state.alt && state.shift)
 }
 
+/// Esc 长按计时。
+///
+/// **踩过的坑（2026-10-21 实测）**：原来每次 `WM_KEYDOWN` 都把起点改成"现在"，
+/// 但长按 Esc 时系统每 ~30 ms 发一次自动重复的 keydown——起点被无限刷新，
+/// `esc_hold_ms()` 永远接近 0，8 秒永远到不了，界面上连进度环都看不见。
+/// 所以必须区分"按下沿"与"自动重复"：只有**未 armed 的按下**才记起点。
+///
+/// 位布局（塞进一个 `AtomicU64`，因为钩子回调里不许加锁、不许分配）：
+/// bit0 = 物理按住，bit1 = 允许计时（armed），高位 = 按下时刻（毫秒）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EscBits(u64);
+
+const ESC_HELD: u64 = 1;
+const ESC_ARMED: u64 = 1 << 1;
+
+impl EscBits {
+    pub const IDLE: EscBits = EscBits(0);
+
+    pub fn from_raw(raw: u64) -> EscBits {
+        EscBits(raw)
+    }
+
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+
+    pub fn is_held(self) -> bool {
+        self.0 & ESC_HELD != 0
+    }
+
+    pub fn is_armed(self) -> bool {
+        self.0 & ESC_ARMED != 0
+    }
+
+    /// 按下时刻（毫秒）；未计时时为 0
+    pub fn down_ms(self) -> u64 {
+        self.0 >> 2
+    }
+}
+
+/// 一次 Esc 按键事件 → 新的计时状态。`is_down` 对自动重复也是 true，
+/// 靠 armed 位把重复事件挡在外面。
+pub fn esc_on_key(state: EscBits, is_down: bool, now_ms: u64) -> EscBits {
+    if !is_down {
+        return EscBits::IDLE;
+    }
+    if state.is_held() {
+        // 自动重复（armed 与否都一样）：保持原状态，绝不刷新起点，
+        // 也绝不把"被消费过的按住"重新武装——否则取消后按着不放会立刻二次触发。
+        return state;
+    }
+    // 真正的按下沿：`now_ms.max(1)` 保证 down_ms 不为 0（0 会被当成"未计时"）
+    EscBits((now_ms.max(1) << 2) | ESC_HELD | ESC_ARMED)
+}
+
+/// 已按住的毫秒数；没有 armed 的按下（含被消费过的、只剩物理按住的）返回 0。
+pub fn esc_hold_ms(state: EscBits, now_ms: u64) -> u64 {
+    if !state.is_armed() || state.down_ms() == 0 {
+        return 0;
+    }
+    now_ms.saturating_sub(state.down_ms())
+}
+
+/// 触发或取消破戒后调用：清掉计时，但保留"物理仍按住"这一事实。
+/// 这样按住不放不会立刻二次触发，必须先松开再按下（F-6.4 的进度清零）。
+pub fn esc_consume(state: EscBits) -> EscBits {
+    if state.is_held() {
+        EscBits(ESC_HELD)
+    } else {
+        EscBits::IDLE
+    }
+}
+
 /// 是否要替系统执行"锁屏"：`Win+L` 被我们整体吞掉后，由 hook 线程主动调用
 /// `LockWorkStation()`，这样既不会露开始菜单，F-3.4 的"允许锁屏离开"也还在。
 pub fn wants_lock(vk: u16, is_down: bool, win_down: bool) -> bool {
@@ -361,6 +434,71 @@ mod tests {
         // 只有 F12 单独按（不带修饰键）仍按普通键处理，不引入额外吞键
         let mut st = ModState::default();
         assert_eq!(press(&mut st, 0x7B), Verdict::Pass, "F12");
+    }
+
+    // ---------- Esc 长按计时（2026-10-21 真机踩坑的回归） ----------
+
+    /// 回归：长按 Esc 时系统每 ~30 ms 发一次自动重复 keydown。
+    /// 旧实现每次重复都刷新起点，导致 hold 永远接近 0、8 秒永远不到。
+    #[test]
+    fn esc_auto_repeat_does_not_restart_the_timer() {
+        let mut state = esc_on_key(EscBits::IDLE, true, 1_000);
+        assert_eq!(esc_hold_ms(state, 1_030), 30);
+
+        // 连续 20 次自动重复（每 30 ms 一次）
+        for tick in 1..=20u64 {
+            state = esc_on_key(state, true, 1_000 + tick * 30);
+        }
+
+        assert_eq!(
+            esc_hold_ms(state, 1_600),
+            600,
+            "自动重复不得刷新起点，否则永远到不了 8 秒"
+        );
+        assert_eq!(esc_hold_ms(state, 9_000), 8_000);
+    }
+
+    #[test]
+    fn esc_hold_grows_while_held() {
+        let state = esc_on_key(EscBits::IDLE, true, 5_000);
+        assert_eq!(esc_hold_ms(state, 5_000), 0);
+        assert_eq!(esc_hold_ms(state, 7_500), 2_500);
+        assert_eq!(esc_hold_ms(state, 8_000), 3_000);
+    }
+
+    #[test]
+    fn esc_release_clears_everything() {
+        let state = esc_on_key(EscBits::IDLE, true, 1_000);
+        let released = esc_on_key(state, false, 2_000);
+
+        assert_eq!(released, EscBits::IDLE);
+        assert_eq!(esc_hold_ms(released, 9_000), 0);
+        assert!(!released.is_held());
+    }
+
+    /// F-6.4：取消破戒后进度清零；按住不放不得立刻二次触发，必须松开重按
+    #[test]
+    fn esc_consume_requires_a_fresh_press() {
+        let held = esc_on_key(EscBits::IDLE, true, 1_000);
+        let consumed = esc_consume(held);
+
+        assert!(consumed.is_held(), "物理上仍按住");
+        assert!(!consumed.is_armed());
+        assert_eq!(esc_hold_ms(consumed, 10_000), 0, "消费后不得继续累计");
+
+        // 仍按住时的自动重复也不能把它重新启动
+        let repeat = esc_on_key(consumed, true, 10_030);
+        assert_eq!(esc_hold_ms(repeat, 18_000), 0);
+
+        // 松开再按下 → 重新从 0 开始计时
+        let released = esc_on_key(repeat, false, 10_100);
+        let pressed = esc_on_key(released, true, 11_000);
+        assert_eq!(esc_hold_ms(pressed, 11_500), 500);
+    }
+
+    #[test]
+    fn esc_hold_without_press_is_zero() {
+        assert_eq!(esc_hold_ms(EscBits::IDLE, 9_999), 0);
     }
 
     #[test]

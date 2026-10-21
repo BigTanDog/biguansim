@@ -28,7 +28,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::keyfilter::{
-    decide, reconcile, wants_lock, ModState, Verdict, VK_ESCAPE, VK_LWIN, VK_RWIN,
+    decide, esc_consume as esc_consume_state, esc_hold_ms as esc_hold_at, esc_on_key, reconcile,
+    wants_lock, EscBits, ModState, Verdict, VK_ESCAPE, VK_LWIN, VK_RWIN,
 };
 
 /// 自定义消息：让钩子线程在"最近 100 ms 没有按键"时重装钩子
@@ -46,7 +47,8 @@ const BIT_SHIFT: u8 = 1 << 4;
 
 static MODS: AtomicU8 = AtomicU8::new(0);
 static HOOK_TID: AtomicU32 = AtomicU32::new(0);
-static ESC_DOWN_MS: AtomicU64 = AtomicU64::new(0);
+/// Esc 计时状态（一位打包，回调里 load/store，不加锁、不分配）
+static ESC_BITS: AtomicU64 = AtomicU64::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static SUPERVISOR_STARTED: AtomicBool = AtomicBool::new(false);
 static APP: OnceLock<AppHandle> = OnceLock::new();
@@ -81,24 +83,24 @@ fn encode(state: &ModState) -> u8 {
 /// 清空按键状态：进入 Locked 时调用，避免起势期间按住的键串到闭关里。
 pub fn reset_state() {
     MODS.store(0, Ordering::SeqCst);
-    ESC_DOWN_MS.store(0, Ordering::SeqCst);
+    ESC_BITS.store(0, Ordering::SeqCst);
 }
 
-/// Esc 已按住的毫秒数；没按住返回 0。M4 用它判定 8 秒破戒。
-pub fn esc_hold_ms() -> u64 {
-    let down = ESC_DOWN_MS.load(Ordering::SeqCst);
-    if down == 0 {
-        return 0;
-    }
-    mono_ms().saturating_sub(down)
-}
-
-/// 消费一次 Esc 长按：清零并要求**重新按下**才重新计时（PRD F-6.4 的"进度清零"）。
+/// Esc 已按住的毫秒数；没按住（或被消费过）返回 0。M4 用它判定 8 秒破戒。
 ///
-/// 为什么需要：取消破戒（或触发后）Esc 往往还按着，若不清零，切回 Locked 的
-/// 下一个 tick 会立刻再次满足 8 秒条件，形成"取消 → 又弹出"的死循环。
+/// 注意：判定逻辑在 `keyfilter` 的纯函数里——长按时系统会疯狂重发 keydown，
+/// 必须靠 armed 位只认"按下沿"，否则起点被不断刷新，永远到不了 8 秒。
+pub fn esc_hold_ms() -> u64 {
+    esc_hold_at(
+        EscBits::from_raw(ESC_BITS.load(Ordering::SeqCst)),
+        mono_ms(),
+    )
+}
+
+/// 触发或取消破戒后清零：按住不放不会二次触发，必须松开再按（F-6.4）。
 pub fn esc_consume() {
-    ESC_DOWN_MS.store(0, Ordering::SeqCst);
+    let bits = EscBits::from_raw(ESC_BITS.load(Ordering::SeqCst));
+    ESC_BITS.store(esc_consume_state(bits).raw(), Ordering::SeqCst);
 }
 
 /// 装钩子。失败必须让调用方拒绝入关（PRD D-7）。
@@ -306,11 +308,11 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     let vk = kb.vkCode as u16;
 
     if vk == VK_ESCAPE {
-        if is_down {
-            ESC_DOWN_MS.store(mono_ms(), Ordering::SeqCst);
-        } else {
-            ESC_DOWN_MS.store(0, Ordering::SeqCst);
-        }
+        let bits = EscBits::from_raw(ESC_BITS.load(Ordering::Relaxed));
+        ESC_BITS.store(
+            esc_on_key(bits, is_down, mono_ms()).raw(),
+            Ordering::Relaxed,
+        );
     }
 
     let mut state = decode(MODS.load(Ordering::Relaxed));
