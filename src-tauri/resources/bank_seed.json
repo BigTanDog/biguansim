@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "id": "basic",
+  "name": "基础阵法",
+  "questions": [
+    {
+      "id": "q001",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["math"],
+      "source": "generated",
+      "stem": "∫₀¹ x² dx 的值是？",
+      "options": ["1/4", "1/3", "1/2", "1"],
+      "answer": 1,
+      "hint": "幂函数积分公式"
+    },
+    {
+      "id": "q002",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["math"],
+      "source": "generated",
+      "stem": "A 为 3×3 可逆矩阵，det(A⁻¹) 等于？",
+      "options": ["det(A)", "−det(A)", "1/det(A)", "det(A)²"],
+      "answer": 2,
+      "hint": "逆矩阵行列式与原行列式互为倒数"
+    },
+    {
+      "id": "q003",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["math"],
+      "source": "generated",
+      "stem": "lim(x→0) sin x / x 等于？",
+      "options": ["0", "∞", "不存在", "1"],
+      "answer": 3,
+      "hint": "重要极限"
+    },
+    {
+      "id": "q004",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["math"],
+      "source": "generated",
+      "stem": "A、B 相互独立，P(A)=0.3、P(B)=0.4，则 P(A∩B)=？",
+      "options": ["0.12", "0.7", "0.58", "0.1"],
+      "answer": 0,
+      "hint": "独立事件交集的概率等于概率之积"
+    },
+    {
+      "id": "q005",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "The committee ___ reached a decision.",
+      "options": ["have", "has", "having", "to have"],
+      "answer": 1,
+      "hint": "主谓一致：committee 作整体时为单数"
+    },
+    {
+      "id": "q006",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "与 ubiquitous 意思最接近的是？",
+      "options": ["rare", "ambiguous", "omnipresent", "temporary"],
+      "answer": 2,
+      "hint": "该词表示“无处不在”"
+    },
+    {
+      "id": "q007",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "Had I known the deadline, I ___ earlier.",
+      "options": ["would start", "had started", "will start", "would have started"],
+      "answer": 3,
+      "hint": "与过去事实相反的虚拟语气"
+    },
+    {
+      "id": "q008",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["english"],
+      "source": "generated",
+      "stem": "与 meticulous 意思最接近的是？",
+      "options": ["thorough", "careless", "hasty", "vague"],
+      "answer": 0,
+      "hint": "该词强调一丝不苟"
+    },
+    {
+      "id": "q009",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "平均时间复杂度为 O(n log n) 的排序算法是？",
+      "options": ["冒泡排序", "归并排序", "插入排序", "计数排序"],
+      "answer": 1,
+      "hint": "分治，且稳定"
+    },
+    {
+      "id": "q010",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "TCP 三次握手的主要目的是？",
+      "options": ["加密传输内容", "压缩报文", "同步初始序列号并确认双方可达", "分配 IP 地址"],
+      "answer": 2,
+      "hint": "两次不够，四次多余"
+    },
+    {
+      "id": "q011",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "进程与线程的主要区别是？",
+      "options": ["线程共享所属进程的地址空间", "线程有独立地址空间", "进程不能并发执行", "线程不由内核调度"],
+      "answer": 0,
+      "hint": "同一进程内的线程共享资源"
+    },
+    {
+      "id": "q012",
+      "type": "choice",
+      "difficulty": "undergrad",
+      "tags": ["cs"],
+      "source": "generated",
+      "stem": "关系表中消除非主属性对候选键的部分依赖，要达到？",
+      "options": ["第一范式", "第二范式", "第三范式", "BCNF"],
+      "answer": 1,
+      "hint": "部分依赖是第二范式要解决的问题"
+    }
+  ]
+}
