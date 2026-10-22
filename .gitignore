@@ -55,5 +55,4 @@ desktop.ini
 .DS_Store
 
 # --- 开发过程材料（不随仓库分发）---
-/docs/plans/
-/docs/decisions/
+/docs/
