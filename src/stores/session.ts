@@ -353,9 +353,14 @@ export const useSessionStore = defineStore('session', () => {
     try {
       const page = await ipc.listRecords(1)
       stats.value = page.stats
-      // 可抽题数会随答题变化，顺手同步一次（否则配置页的数字会停在启动那一刻）
-      const boot = await ipc.getState()
-      applyState(boot)
+
+      // 可抽题数会随答题变化，顺手同步一次（否则配置页的数字会停在启动那一刻）。
+      // **只取这两个字段**：不能走 `applyState`——出关后定时器已销毁，
+      // `getState()` 的 elapsedMs 是 0，套回去会把结算页的"本次时长"抹成 00:00
+      // （2026-10-22 从 git 下载的包实测踩到）。
+      const view = await ipc.getState()
+      bankTotal.value = view.bankTotal
+      bankDrawable.value = view.bankDrawable
     } catch (err) {
       lastError.value = String(err)
     }

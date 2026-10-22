@@ -48,7 +48,7 @@ function again(): void {
       <button class="btn btn--primary" type="button" @click="again">再入一关</button>
     </div>
 
-    <p class="settled__todo">累计时长、连续天数与长老评语将在 M5 补齐。</p>
+    <p class="settled__todo">每一次的时长与结果都记在「闭关记录」里。</p>
   </main>
 </template>
 

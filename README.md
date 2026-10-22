@@ -10,8 +10,8 @@ Windows 桌面工具：自愿设定学习时长后全屏接管电脑，中途退
 | ----------------------- | ---------------------------------------------------------------------------------------------- |
 | Windows x64（解压即用） | [`release/biguansim-v0.1.0-win64.zip`](release/biguansim-v0.1.0-win64.zip)                     |
 | 直链（GitHub）          | `https://github.com/BigTanDog/biguansim/raw/main/release/biguansim-v0.1.0-win64.zip`           |
-| exe 校验和              | `4F0FDBB2CFDCEB7F4B83C4FA3412C7809B38AA39DCD0966E4E2BEB7FD209D60A`（包内 `SHA256.txt` 同此值） |
-| zip 校验和              | `B5CA21E56885D1805C143AEECCD42AB2D2EDD5533F5AA6958D56326F0435780F`                             |
+| exe 校验和              | `6E45CA8805284EF22CC16A15B782767FACCC2FD177C01CB59B611DE3C32B1181`（包内 `SHA256.txt` 同此值） |
+| zip 校验和              | `D79B76F4B4E9D020E80F82E6C4FD9F4C53DE7FFE64E443D7910D9C0C2E893A9C`                             |
 
 包内含 `biguansim.exe` + `使用说明.txt` + `SHA256.txt`；**不附带**源码与个人数据。未做代码签名，SmartScreen 会提示"未知发布者"（更多信息 → 仍要运行）。
 

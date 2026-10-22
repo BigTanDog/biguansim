@@ -66,7 +66,7 @@ pub(super) fn begin_challenge(
     }
 
     if drawn.len() < needed as usize {
-        // M4 的题库只有 12 题、单轮最多 5 题，正常不会触发；
+        // 题库 30 题、单轮最多 5 题，正常不会触发；
         // 一旦 M5 接入记忆衰减，这条就是"退化规则没生效"的告警。
         ::log::warn!(
             "[challenge] 可抽题不足：需要 {needed} 题，只抽到 {} 题（M5 需按 F-8.2 三级退化补齐）",

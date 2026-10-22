@@ -22,7 +22,14 @@ export function formatCountdown(ms: number): string {
 
 /** 已坚持时长：始终显示到分钟，≥1 小时用 `H:MM` */
 export function formatElapsed(ms: number): string {
-  const totalMinutes = Math.floor(Math.max(0, ms) / 60000)
+  const safe = Math.max(0, ms)
+  const totalMinutes = Math.floor(safe / 60000)
+
+  // 不足 1 分钟显示秒：否则"提前出关 40 秒"会显示成 `00 分`，看着像坏掉了
+  if (totalMinutes === 0) {
+    return `${Math.max(1, Math.round(safe / 1000))} 秒`
+  }
+
   const hours = Math.floor(totalMinutes / 60)
   const minutes = totalMinutes % 60
   return hours > 0 ? `${hours}:${pad(minutes)}` : `${pad(minutes)} 分`

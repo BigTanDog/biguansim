@@ -211,8 +211,23 @@ mod tests {
     #[test]
     fn embedded_bank_is_valid() {
         let bank = Bank::load(std::path::Path::new("不存在的目录"));
-        assert!(bank.len() >= 12, "内嵌题库至少 12 题，实际 {}", bank.len());
+        assert_eq!(
+            bank.len(),
+            30,
+            "v0.1 内嵌题库固定 30 题，实际 {}",
+            bank.len()
+        );
         assert_eq!(bank.id, "basic");
+
+        // 三科各 10 题：改题库时别把某一科悄悄改没了
+        for tag in ["math", "english", "cs"] {
+            let count = bank
+                .questions
+                .iter()
+                .filter(|question| question.tags.iter().any(|item| item == tag))
+                .count();
+            assert_eq!(count, 10, "{tag} 应有 10 题，实际 {count}");
+        }
 
         let mut positions = std::collections::HashSet::new();
         for question in &bank.questions {
