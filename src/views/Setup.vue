@@ -91,12 +91,11 @@ function pick(preset: number): void {
 
       <label class="custom">
         <span class="custom__label"
-          >自定义（{{ MIN_MINUTES }}–{{ MAX_MINUTES }} 分钟，步进 5）</span
+          >自定义（{{ MIN_MINUTES }}–{{ MAX_MINUTES }} 分钟，步进 5）
+          <em v-if="duration < 25" class="custom__warn">· 不足 25 分钟不计为有效日</em></span
         >
         <input v-model.number="duration" class="input" type="number" min="10" max="480" step="5" />
       </label>
-
-      <p v-if="duration < 25" class="tip">本次不计为有效日（当日累计 ≥25 分钟仍算）</p>
     </section>
 
     <section class="card">
@@ -129,9 +128,8 @@ function pick(preset: number): void {
     </p>
 
     <p class="footnote">
-      闭关中可点右下角「解开阵法」退出：先冷却，再答问阵，全对方可出关；第 3
-      次起还要抄写。遇急事可长按 Esc 八秒走破戒通道（记为一次破戒）。Ctrl+Alt+Del 与 Win
-      键拦不住，详见「关于」页的已知局限。
+      闭关中想退出：点「解开阵法」→ 冷却 → 答问阵；急事可长按 Esc 八秒破戒。拦不住什么，见「设置 →
+      关于」。
     </p>
   </main>
 </template>
@@ -140,16 +138,22 @@ function pick(preset: number): void {
 .setup {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   width: min(560px, 100%);
   height: 100%;
   margin: 0 auto;
-  padding: 28px 24px;
+  /* 底部多留 8px：脚注贴着滚动区下沿时容易被切掉半行 */
+  padding: 18px 24px 16px;
   overflow-y: auto;
 }
 
+/* flex 子项默认 min-width:auto，长文本会把列撑出容器宽度从而被裁掉 */
+.setup > * {
+  min-width: 0;
+}
+
 .setup__title {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 500;
   letter-spacing: 0.06em;
 }
@@ -170,7 +174,7 @@ function pick(preset: number): void {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border: 1px solid var(--dialog-border);
   border-radius: var(--radius-card);
   background: var(--dialog-bg);
@@ -198,14 +202,14 @@ function pick(preset: number): void {
 }
 
 .card {
-  padding: 16px;
+  padding: 12px 14px;
   border: 1px solid var(--dialog-border);
   border-radius: var(--radius-card);
   background: var(--dialog-bg);
 }
 
 .card__title {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   color: var(--fg-muted);
   font-size: 12px;
   font-weight: 400;
@@ -213,13 +217,15 @@ function pick(preset: number): void {
 }
 
 .presets {
+  /* 六个时长排一行：原来两行占掉 46px，屏幕矮的时候会把脚注挤出可视区 */
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
 }
 
 .preset {
-  padding: 10px 0;
+  padding: 7px 0;
+  font-size: 12px;
   border: 1px solid var(--dialog-border);
   border-radius: var(--radius-btn);
   background: transparent;
@@ -238,9 +244,21 @@ function pick(preset: number): void {
   margin-top: 14px;
 }
 
+.custom__warn {
+  margin-left: 8px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
 .custom__label {
   color: var(--fg-muted);
   font-size: 11px;
+}
+
+/* 提示跟着标签走，不再单独占一行——屏幕矮的时候那一行会把脚注挤出可视区 */
+.custom__warn {
+  color: var(--accent);
+  font-style: normal;
 }
 
 .input {
@@ -322,6 +340,11 @@ function pick(preset: number): void {
 }
 
 .footnote {
+  /* 窄窗口下这句话最长：允许在任意位置断行，并把右侧留出滚动条的宽度，
+     否则最后半句会被容器边缘裁掉（2026-10-22 1120 宽实测） */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  padding-right: 8px;
   color: var(--fg-muted);
   font-size: 11px;
   line-height: 1.6;

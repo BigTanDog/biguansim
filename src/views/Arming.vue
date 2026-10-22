@@ -36,7 +36,7 @@ onUnmounted(() => {
     <p class="arming__count num">{{ seconds }}</p>
     <template v-if="!isMirror">
       <p class="arming__hint">此时取消还来得及（Esc）</p>
-      <p class="arming__note">切走窗口后 Esc 就无效了——全局拦截要到 M3 才生效。</p>
+      <p class="arming__note">三秒之后全屏接管，键盘也归它管。</p>
     </template>
   </main>
 </template>
