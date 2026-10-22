@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 use crate::core::session::{SessionInfo, SessionState, EMERGENCY_SENTENCE};
 use crate::events::{PhasePayload, StateChanged};
 use crate::platform::focus;
+use crate::platform::shell_guard;
 use crate::runtime::{read_timer, Runtime};
 
 pub fn publish_state(app: &AppHandle, runtime: &Arc<Runtime>) {
@@ -26,8 +27,14 @@ pub fn publish_state(app: &AppHandle, runtime: &Arc<Runtime>) {
 
     // 抄写与急事确认要打中文：让输入法拿到前台（否则候选窗会被抢焦点顶掉）
     match state {
-        SessionState::Copying | SessionState::Confirming => focus::pause(),
-        _ => focus::resume(),
+        SessionState::Copying | SessionState::Confirming => {
+            focus::pause();
+            shell_guard::pause();
+        }
+        _ => {
+            focus::resume();
+            shell_guard::resume();
+        }
     }
 
     let Some(session) = session else {

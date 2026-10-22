@@ -101,10 +101,15 @@ pub fn lock_screen(app: &AppHandle) -> Result<(), String> {
     );
 
     spawn_topmost_keeper(app.clone());
+    // `Win` 键唤出的开始菜单/搜索压不住，只能出现即收回（见 shell_guard 的注释）
+    super::shell_guard::start();
     Ok(())
 }
 
 pub fn unlock_screen(app: &AppHandle) {
+    // 先停哨兵：出关后还注入 Esc 会打断用户自己的输入
+    super::shell_guard::stop();
+
     // 幂等清理：调用方忘了置 false 也不会让窗口永远置顶
     app.state::<AppState>().set_locked(false);
     if let Ok(mut guard) = LOCKED_RECTS.lock() {

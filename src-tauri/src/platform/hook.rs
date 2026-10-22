@@ -7,7 +7,7 @@
 //! 4. 每秒用 `GetAsyncKeyState` 校正修饰键状态——锁屏/安全桌面期间抬起事件不会回传，
 //!    不校正的话解锁后键盘会被当成"Win 一直按住"而全部吞掉。
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
@@ -58,6 +58,72 @@ static PENDING_LOCK: AtomicBool = AtomicBool::new(false);
 static PENDING_TOAST: AtomicBool = AtomicBool::new(false);
 static ACTIONS_STARTED: AtomicBool = AtomicBool::new(false);
 static APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// `Win` 键事件诊断环（**只在钩子回调里写无锁环，不写日志**——AGENTS §6）。
+///
+/// 为什么需要：`006` 说"真键盘 `Win` 键拦不住"，但 2026-10-20 22:59 的 `849fd3d`
+/// 才把 `Win` 从"按下放行"改成"按下与抬起都吞掉"。到底拦没拦住，不能靠肉眼
+/// 判断"开始菜单有没有弹"，得看**钩子到底收到了什么、判成了什么**。
+/// 探针（`examples/win_probe.rs`）2026-10-22 实测：真实键盘 `Win` 键 10/10 被吞，
+/// 开始菜单一次都没出现——所以主程序里也要留同样的证据。
+const WIN_RING_LEN: usize = 64;
+static WIN_RING: [AtomicU64; WIN_RING_LEN] = [const { AtomicU64::new(0) }; WIN_RING_LEN];
+static WIN_RING_HEAD: AtomicUsize = AtomicUsize::new(0);
+static WIN_RING_CURSOR: AtomicUsize = AtomicUsize::new(0);
+/// 本周期收到的**所有**键盘事件数（down + up）。
+///
+/// 为什么要有它：2026-10-22 主程序实测只记到一条 `Win` 键抬起、没有对应的按下，
+/// 分不清是"钩子没收到"还是"环形缓冲把它挤掉了"。总计数一比就分得清。
+static KEY_EVENTS: AtomicU64 = AtomicU64::new(0);
+
+/// 记一条 `Win` 键事件。位布局：
+/// `[48..64) 序号 | [40..48) flags | bit32 按下 | bit16 已吞 | [0..16) vk`
+fn push_win_event(vk: u16, is_down: bool, flags: u32, swallowed: bool) {
+    let seq = WIN_RING_HEAD.fetch_add(1, Ordering::Relaxed);
+    let packed = (((seq as u64) & 0xFFFF) << 48)
+        | (((flags as u64) & 0xFF) << 40)
+        | ((is_down as u64) << 32)
+        | ((swallowed as u64) << 16)
+        | vk as u64;
+    WIN_RING[seq % WIN_RING_LEN].store(packed, Ordering::Release);
+}
+
+/// 把环里的 `Win` 键事件打印出来（在 supervisor 线程做，不在钩子回调里）
+fn drain_win_events() {
+    let mut cursor = WIN_RING_CURSOR.load(Ordering::Relaxed);
+    let head = WIN_RING_HEAD.load(Ordering::Acquire);
+
+    // 环被挤爆过：说明有事件被覆盖丢了，必须报出来（否则会误判成"钩子没收到"）
+    if head.saturating_sub(cursor) > WIN_RING_LEN {
+        ::log::warn!(
+            "[hook] Win 键事件环溢出：积压 {} 条 > 容量 {WIN_RING_LEN}，明细可能不完整",
+            head - cursor
+        );
+    }
+
+    while cursor != head {
+        let packed = WIN_RING[cursor % WIN_RING_LEN].load(Ordering::Acquire);
+        if ((packed >> 48) as usize & 0xFFFF) == (cursor & 0xFFFF) {
+            let vk = (packed & 0xFFFF) as u16;
+            let flags = ((packed >> 40) & 0xFF) as u32;
+            let is_down = (packed >> 32) & 1 == 1;
+            let swallowed = (packed >> 16) & 1 == 1;
+            ::log::info!(
+                "[hook] Win 键事件：vk=0x{vk:02X} {} flags=0x{flags:02X}{} → {}",
+                if is_down { "down" } else { "up  " },
+                if flags & 0x10 != 0 {
+                    "（注入）"
+                } else {
+                    "（真实键盘）"
+                },
+                if swallowed { "已吞掉" } else { "放行" }
+            );
+        }
+        cursor += 1;
+    }
+
+    WIN_RING_CURSOR.store(cursor, Ordering::Relaxed);
+}
 
 fn mono_ms() -> u64 {
     let mut ticks: u64 = 0;
@@ -262,6 +328,13 @@ fn spawn_supervisor() {
                 continue;
             }
 
+            // 0. 把 `Win` 键事件落成日志（诊断"开始菜单弹没弹"的硬证据）
+            drain_win_events();
+            let keys = KEY_EVENTS.swap(0, Ordering::SeqCst);
+            if keys > 0 {
+                ::log::info!("[hook] 本周期收到 {keys} 个键盘事件（down+up）");
+            }
+
             // 1. 键态校正：锁屏/安全桌面期间的抬起事件收不到，只能靠真实键态纠正
             let pressed = |vk: i32| -> bool {
                 // SAFETY: 只查询键态，无副作用
@@ -338,6 +411,15 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     // SAFETY: code >= 0 时系统保证 lparam 指向 KBDLLHOOKSTRUCT
     let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
     let vk = kb.vkCode as u16;
+    KEY_EVENTS.fetch_add(1, Ordering::Relaxed);
+
+    // 哨兵注入的 Esc（`shell_guard::INJECT_MARK`）：**原样放行，且不计破戒长按**。
+    // 不放行的话它会被当成"按住 Alt/Ctrl 时的 Esc"吞掉，开始菜单就收不回去；
+    // 不跳过计时的话，哨兵每次收回都会给破戒进度喂一次按下沿（F-6.4 的进度显示会乱动）。
+    if kb.dwExtraInfo == super::shell_guard::INJECT_MARK {
+        // SAFETY: 交给下一个钩子
+        return unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
+    }
 
     if vk == VK_ESCAPE {
         let bits = EscBits::from_raw(ESC_BITS.load(Ordering::Relaxed));
@@ -351,6 +433,11 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     let win_down = state.any_win();
     let verdict = decide(vk, is_down, &mut state);
     MODS.store(encode(&state), Ordering::Relaxed);
+
+    // `Win` 键单独记一条：判成什么、有没有真的吞，是排查"开始菜单到底弹没弹"的硬证据
+    if vk == VK_LWIN || vk == VK_RWIN {
+        push_win_event(vk, is_down, kb.flags, matches!(verdict, Verdict::Swallow));
+    }
 
     // Win+L 被整体吞掉了，锁屏得我们自己来（F-3.4）。
     // **不能在这里直接调**：切安全桌面可能耗时数百毫秒，回调超时会让钩子被系统摘除。

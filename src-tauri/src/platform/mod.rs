@@ -7,5 +7,6 @@ pub mod keyfilter;
 pub mod log;
 pub mod overlay;
 pub mod power;
+pub mod shell_guard;
 pub mod sleep;
 pub mod time;

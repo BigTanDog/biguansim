@@ -303,6 +303,18 @@ pub fn is_running() -> bool {
     RUNNING.load(Ordering::Relaxed)
 }
 
+/// **立刻抢一次前台**，返回是否成功。
+///
+/// 谁在用：`platform::shell_guard` 收回开始菜单/搜索之后调用——
+/// 注入 `Esc` 只关掉了界面，**键盘焦点还留在 shell 的搜索框里**，
+/// 于是用户之后每按一个键，shell 都会重新抢到前台（2026-10-22 实测：只按了 2 次 `Win`，
+/// 哨兵却触发了 72 次）。把焦点抢回我们的窗口，这个循环才断。
+///
+/// 与 `try_reclaim` 的区别只是把结果返回给调用方；判定逻辑完全共用。
+pub fn reclaim_now() -> bool {
+    try_reclaim()
+}
+
 /// 避免未使用告警：保留常量语义供外部读取
 pub const fn retry_interval() -> Duration {
     Duration::from_millis(RETRY_INTERVAL_MS as u64)
