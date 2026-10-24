@@ -35,6 +35,28 @@ fn pick_speaker() -> String {
 }
 
 /// (题库总数, 当前可抽数)。可抽 = 不在记忆衰减冷却里的题（F-1.2 要求分开显示）。
+#[cfg(test)]
+mod speaker_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// 回归：2026-10-24 用户反馈"正式版里每次都是长老"。
+    /// 这条只证明**随机源本身**在 release 里也是变的（种子 = 纳秒 ^ pid），
+    /// 若它通过而界面仍不变，问题就在投影或前端，不在这里。
+    #[test]
+    fn pick_speaker_varies_across_calls() {
+        let mut seen: HashSet<String> = HashSet::new();
+        for _ in 0..200 {
+            seen.insert(pick_speaker());
+        }
+        assert!(
+            seen.len() >= 3,
+            "200 次只出现了 {} 种说话人：{seen:?}",
+            seen.len()
+        );
+    }
+}
+
 fn bank_counts(runtime: &Arc<Runtime>) -> (usize, usize) {
     let Ok(bank) = runtime.bank.lock() else {
         return (0, 0);
@@ -93,6 +115,7 @@ pub struct BootstrapView {
     /// 是否 debug 构建：前端据此显示 DEV 退出按钮与"测试版"提示。
     /// 用 Rust 的 `cfg!` 而不是 Vite 的 `import.meta.env.DEV`——后者在
     /// `tauri build --debug` 里是 false，导致测试版没有逃生口（2026-10-21 踩过）。
+    version: String,
     debug_build: bool,
 }
 
@@ -152,6 +175,7 @@ pub fn bootstrap(runtime: State<'_, Arc<Runtime>>) -> BootstrapView {
         bank,
         last_session,
         stats: data::stats_view(&runtime),
+        version: env!("CARGO_PKG_VERSION").to_string(),
         debug_build: cfg!(debug_assertions),
     }
 }
@@ -175,6 +199,7 @@ pub fn start_session(
     let bank = bank_id.unwrap_or_else(|| "basic".to_string());
     // 每关换一个说话人（阵灵/前辈/冥冥之中的声音/长老），避免台词永远出自同一张嘴
     let speaker = pick_speaker();
+    ::log::info!("[ipc] 本关说话人：{speaker}");
     let speaker_label = speaker.clone();
     // 成本基数在入关时固化进会话：状态机因此不必读文件，也不会中途被改配置影响
     let mut config = runtime.store.load_config();

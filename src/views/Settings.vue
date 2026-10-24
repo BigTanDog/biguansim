@@ -140,7 +140,7 @@ async function openDir(): Promise<void> {
 
     <section class="card">
       <h2 class="card__title">关于</h2>
-      <p class="about__line">闭关模拟器 v0.1 · 离线单机 · 不收集任何数据</p>
+      <p class="about__line">闭关模拟器 v{{ store.version }} · 离线单机 · 不收集任何数据</p>
       <p class="about__sub">它拦不住什么（PRD §13）：</p>
       <ul class="limits">
         <li v-for="item in LIMITS" :key="item">{{ item }}</li>

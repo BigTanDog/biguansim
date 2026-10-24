@@ -62,6 +62,8 @@ export const useSessionStore = defineStore('session', () => {
   const speaker = ref<string | null>(null)
   const bank = ref('basic')
   const bankName = ref('基础阵法')
+  /** 应用版本号（由 Rust 的 CARGO_PKG_VERSION 下发，设置页「关于」显示） */
+  const version = ref('0.0.0')
   const bankTotal = ref(0)
   /** 可抽题数（总数 − 冷却中），F-1.2 要求与总数分开显示 */
   const bankDrawable = ref(0)
@@ -158,6 +160,7 @@ export const useSessionStore = defineStore('session', () => {
       bankName.value = boot.bank.name || '基础阵法'
       bankTotal.value = boot.bank.total
       bankDrawable.value = boot.bank.drawable
+      version.value = boot.version
       debugBuild.value = boot.debugBuild
       stats.value = boot.stats
       lastSession.value = boot.lastSession
@@ -440,6 +443,7 @@ export const useSessionStore = defineStore('session', () => {
     speaker,
     bank,
     bankName,
+    version,
     bankTotal,
     bankDrawable,
     debugBuild,

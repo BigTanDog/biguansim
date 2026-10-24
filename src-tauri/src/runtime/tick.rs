@@ -138,6 +138,7 @@ pub(super) fn step_arming(app: &AppHandle, runtime: &Arc<Runtime>) {
     let session = session_of(runtime);
     let goal = session.as_ref().and_then(|item| item.goal.clone());
     let speaker = session.as_ref().map(|item| item.speaker.clone());
+    ::log::info!("[tick] 进入闭关，说话人 {speaker:?}");
 
     let _ = app.emit(
         "state://changed",

@@ -1,6 +1,6 @@
 [package]
 name = "biguansim"
-version = "0.1.0"
+version = "0.1.3"
 description = "闭关模拟器：自愿设定时长后全屏接管电脑的本地工具"
 edition = "2021"
 rust-version = "1.77"

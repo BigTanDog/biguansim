@@ -69,6 +69,8 @@ export interface BootstrapView {
   stats: StatsView
   /** 上次异常中断的会话；正常启动为 null */
   lastSession: LastSession | null
+  /** Rust 侧 CARGO_PKG_VERSION，设置页「关于」显示 */
+  version: string
   /** debug 构建才为 true：前端据此显示 DEV 退出按钮与测试版提示 */
   debugBuild: boolean
 }

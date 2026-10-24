@@ -2,16 +2,16 @@
 
 Windows 桌面工具：自愿设定学习时长后全屏接管电脑，中途退出需等待冷却并通过答题。全程离线、无账号、无遥测。
 
-单人自用 + 小范围分发（≤10 人）。当前状态：**v0.1.0 已打包（2026-10-22）**，进入 14 天自用观察期。
+单人自用 + 小范围分发（≤10 人）。当前状态：**v0.1.3**（2026-10-24）。版本号规则：M5 交付时为 0.1.0，之后每轮修 bug +0.01。
 
 ## 下载
 
 | 包                      | 地址                                                                                           |
 | ----------------------- | ---------------------------------------------------------------------------------------------- |
-| Windows x64（解压即用） | [`release/biguansim-v0.1.0-win64.zip`](release/biguansim-v0.1.0-win64.zip)                     |
-| 直链（GitHub）          | `https://github.com/BigTanDog/biguansim/raw/main/release/biguansim-v0.1.0-win64.zip`           |
-| exe 校验和              | `5E40F1D83B292A5855339E5C668D591B17B3C174A56E7DFE6D9FCCA19669CBBE`（包内 `SHA256.txt` 同此值） |
-| zip 校验和              | `544F0ABD7BB3E526FA1B9D97CE48819486AC1FB9B44609CF70E94FA2A174A71A`                             |
+| Windows x64（解压即用） | [`release/biguansim-v0.1.3-win64.zip`](release/biguansim-v0.1.3-win64.zip)                     |
+| 直链（GitHub）          | `https://github.com/BigTanDog/biguansim/raw/main/release/biguansim-v0.1.3-win64.zip`           |
+| exe 校验和              | `7A8920FC5DA60C522A8BF458DF1952B0D3F81F936D4BE76BA41495284390B322`（包内 `SHA256.txt` 同此值） |
+| zip 校验和              | `55CFFAB0E8818F42FE682EEA250DB321A1721D238645A3983FDE1364124286BA`                             |
 
 包内含 `biguansim.exe` + `使用说明.txt` + `SHA256.txt`；**不附带**源码与个人数据。未做代码签名，SmartScreen 会提示"未知发布者"（更多信息 → 仍要运行）。
 
